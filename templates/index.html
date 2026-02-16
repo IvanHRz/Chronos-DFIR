@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chronos-DFIR Web</title>
+    <!-- Tabulator CSS -->
+    <link href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator_midnight.min.css" rel="stylesheet">
+    <script type="text/javascript" src="https://oss.sheetjs.com/sheetjs/xlsx.full.min.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+
+    <div class="container">
+        <header>
+            <h1>Chronos-DFIR <span class="badge">BETA</span></h1>
+            <p>Advanced Forensic Artifact Timeline Explorer</p>
+        </header>
+
+        <div class="upload-section" id="drop-area">
+            <form class="my-form">
+                <p>Drag & Drop Artifacts (MFT, EVTX) or Reports (CSV, XLSX, TSV, JSON, Parquet, SQLite)</p>
+                <input type="file" id="fileElem" accept=".evtx,.mft,.csv,.xlsx,.tsv" onchange="handleFiles(this.files)">
+                <label class="button" for="fileElem">Select File</label>
+            </form>
+            <div id="upload-status"></div>
+        </div>
+
+        <div class="controls hidden" id="controls">
+            <select id="artifact-type">
+                <option value="EVTX">EVTX (Event Logs)</option>
+                <option value="MFT">MFT (NTFS)</option>
+            </select>
+            <button id="process-btn" class="btn-primary">Process Artifact</button>
+        </div>
+
+        <div id="results-area" class="hidden">
+            <!-- Chart.js -->
+            <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+            <!-- Toolbar -->
+            <div class="toolbar" style="display: flex; gap: 10px; padding: 10px; align-items: center;">
+                <button id="download-csv" class="btn">Download CSV</button>
+                <button id="download-excel" class="btn">Download Excel</button>
+                <button id="download-split" class="btn" title="Split into 100MB chunks (Zip)">Download Split
+                    (Zip)</button>
+                <button id="filter-selection-btn" class="btn">Filter Selection</button>
+                <input type="text" id="global-search" class="search-input" placeholder="Global Search (All Columns)..."
+                    style="flex-grow: 1; padding: 8px;">
+                <span id="record-count">0 Records Loaded</span>
+            </div>
+
+            <!-- Time Controls & Info -->
+            <div class="time-controls"
+                style="display: flex; gap: 10px; padding: 10px; align-items: center; background: #1a1a1a; border-bottom: 2px solid #333;">
+                <span id="time-range-info" style="color: #00bcd4; font-weight: bold; margin-right: 15px;">Time Range:
+                    N/A</span>
+
+                <label style="color: #aaa;">From:</label>
+                <input type="datetime-local" id="time-start" class="search-input" style="padding: 5px;">
+
+                <label style="color: #aaa;">To:</label>
+                <input type="datetime-local" id="time-end" class="search-input" style="padding: 5px;">
+
+                <button id="filter-time-btn" class="btn-sm" style="background: #00bcd4; color: #000;">Filter
+                    Time</button>
+                <button id="clear-time-btn" class="btn-sm"
+                    style="background: #666; color: #fff; margin-left: 5px;">Clear</button>
+
+                <div style="flex-grow: 1;"></div>
+
+                <label style="color: #fff; cursor: pointer; display: flex; align-items: center; gap: 5px;">
+                    <input type="checkbox" id="log-scale-toggle"> Logarithmic Scale
+                </label>
+            </div>
+
+            <!-- Chart Controls -->
+            <div class="chart-controls"
+                style="display: flex; justify-content: flex-end; gap: 5px; margin-bottom: 5px; padding-right: 10px;">
+                <button class="btn-sm" onclick="downloadChartPNG()">📷 PNG</button>
+                <button class="btn-sm" onclick="downloadChartExcel()">📊 Excel (Data)</button>
+                <!-- Help Icon / Context -->
+                <button class="btn-sm"
+                    style="background:#555; color:#fff; border-radius:50%; width:24px; height:24px; padding:0; line-height:24px; text-align:center; cursor:help;"
+                    title="Levels: Critical(1), Error(2), Warning(3), Info(4), Verbose(5)">?</button>
+            </div>
+
+            <!-- Timeline Chart -->
+            <div id="chart-wrapper" style="position: relative;">
+                <canvas id="timelineChart"></canvas>
+                <div id="chart-interpretation" style="padding: 10px; color: #ccc; font-style: italic;"></div>
+            </div>
+
+            <div class="table-container">
+                <div id="timeline-table"></div>
+            </div>
+        </div>
+
+        <!-- Details Modal -->
+        <div id="detail-modal" class="modal hidden">
+            <div class="modal-content">
+                <span class="close-btn">&times;</span>
+                <h3 id="modal-title">Cell Details</h3>
+                <pre id="modal-text"></pre>
+            </div>
+        </div>
+
+        <!-- Scripts -->
+        <script type="text/javascript" src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
+        <script src="/static/script.js?v=55"></script>
+
+</body>
+
+</html>

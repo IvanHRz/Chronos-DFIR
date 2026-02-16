@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+.DS_Store
+**/.DS_Store
+output/*
+!output/.gitkeep
+uploads/*
+!uploads/.gitkeep
+server.log
+Archivos_prueba/
