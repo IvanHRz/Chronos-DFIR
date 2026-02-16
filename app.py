@@ -270,23 +270,19 @@ async def get_data(filename: str, page: int = 1, size: int = 50, query: Optional
                 lf = lf.drop("_ts_filter_")
 
 
-            # GLOBAL SEARCH LOGIC (Apply before pagination)
+            # GLOBAL SEARCH LOGIC (Optimized with any_horizontal)
             if query and query.strip():
-                import functools, operator
                 q_lower = query.strip().lower()
-                # 1. Search ALL columns in the schema, casting to Utf8
                 all_cols = schema.names()
-                
                 if all_cols:
-                    # literal=True avoids regex errors, fill_null(False) handles missing values
-                    filters = [
-                        pl.col(c).cast(pl.Utf8).str.to_lowercase().str.contains(q_lower, literal=True).fill_null(False) 
-                        for c in all_cols
-                    ]
-                    
-                    if filters:
-                        combined_filter = functools.reduce(operator.or_, filters)
-                        lf = lf.filter(combined_filter)
+                    # Search ALL columns lazily by casting to Utf8
+                    # any_horizontal is much faster than cross-column reduce
+                    lf = lf.filter(
+                        pl.any_horizontal(
+                            pl.col(c).cast(pl.Utf8).str.to_lowercase().str.contains(q_lower, literal=True).fill_null(False)
+                            for c in all_cols
+                        )
+                    )
 
             # --- COLUMN HEADER FILTERS (from Tabulator) ---
             if col_filters and col_filters.strip():
@@ -769,19 +765,17 @@ async def get_histogram(filename: str, exclude_id: str = None, start_time: str =
             df = df.with_columns(pl.col("EventID").cast(pl.Utf8))
             df = df.filter(pl.col("EventID") != exclude_id)
 
-        # Filter by Search Query
+        # Filter by Search Query (Optimized with any_horizontal)
         if query and query.strip():
-            import functools, operator
             q_lower = query.strip().lower()
             all_cols = df.columns
             if all_cols:
-                # Search ALL columns, literal=True for robust matching, fill_null(False) for null safety
-                search_filters = [
-                    pl.col(c).cast(pl.Utf8).str.to_lowercase().str.contains(q_lower, literal=True).fill_null(False) 
-                    for c in all_cols
-                ]
-                combined_filter = functools.reduce(operator.or_, search_filters)
-                df = df.filter(combined_filter)
+                df = df.filter(
+                    pl.any_horizontal(
+                        pl.col(c).cast(pl.Utf8).str.to_lowercase().str.contains(q_lower, literal=True).fill_null(False)
+                        for c in all_cols
+                    )
+                )
 
         # Apply Column Header Filters (from Tabulator)
         if col_filters and col_filters.strip():

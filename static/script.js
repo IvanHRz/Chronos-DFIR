@@ -14,6 +14,7 @@ let currentChartData = null; // Cache for re-rendering
 let currentStartTime = null;
 let currentEndTime = null;
 let currentColumnFilters = {}; // Track active column header filters
+let histogramAbortController = null; // Prevent race conditions in charting
 let filterDebounceTimer = null; // Debounce chart reload on filter changes
 
 // New Reset Function to ensure no state persistence
@@ -90,7 +91,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         loadHistogram(currentFilename, currentExcludeId, currentStartTime, currentEndTime);
                     }
                 }
-            }, 500); // 500ms debounce
+            }, 850); // 850ms debounce for smoother universal search on large files
         });
     }
 
@@ -965,8 +966,18 @@ async function loadHistogram(filename, excludeId = null, startTime = null, endTi
     // Prevent caching
     url += `_t=${Date.now()}&`;
 
+    // Visual Feedback
+    if (interp) {
+        interp.style.color = '#888';
+        interp.innerText = "Filtering data and updating chart...";
+    }
+
+    // Cancel any pending histogram request to prevent race conditions
+    if (histogramAbortController) histogramAbortController.abort();
+    histogramAbortController = new AbortController();
+
     try {
-        const response = await fetch(url);
+        const response = await fetch(url, { signal: histogramAbortController.signal });
         const data = await response.json();
 
         // Handle Backend Error
