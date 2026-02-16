@@ -11,6 +11,15 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/themes/dark.css">
     <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .highlight-term {
+            background-color: #ffeb3b;
+            color: #000;
+            font-weight: bold;
+            padding: 2px 4px;
+            border-radius: 3px;
+        }
+    </style>
 </head>
 
 <body>
@@ -48,6 +57,8 @@
                 <button id="download-excel" class="btn">Download Excel</button>
                 <button id="download-split" class="btn" title="Split into 100MB chunks (Zip)">Download Split
                     (Zip)</button>
+                <button id="download-ai" class="btn" style="background: #9c27b0; color: white;"
+                    title="Export filtered view without empty columns (Context Optimized)">Download AI Context</button>
                 <button id="filter-selection-btn" class="btn">Filter Selection</button>
                 <input type="text" id="global-search" class="search-input" placeholder="Global Search (All Columns)..."
                     style="flex-grow: 1; padding: 8px;">

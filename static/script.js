@@ -108,6 +108,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const dlXlsx = document.getElementById('download-xlsx');
     if (dlXlsx) dlXlsx.addEventListener('click', () => downloadData('xlsx'));
 
+    const dlAi = document.getElementById('download-ai');
+    if (dlAi) dlAi.addEventListener('click', () => downloadData('csv', true));
+
     // Filter Button Logic
     bindFilterButton();
 
@@ -200,6 +203,28 @@ function handleDrop(e) {
     const dt = e.dataTransfer;
     const files = dt.files;
     handleFiles(files);
+}
+
+// Custom Formatter for Search Highlighting
+function highlightFormatter(cell, formatterParams, onRendered) {
+    let val = cell.getValue();
+    if (val === null || val === undefined) return "";
+    val = String(val);
+
+    // HTML Escape first
+    val = val.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+
+    if (currentQuery && currentQuery.trim().length > 0) {
+        // Case insensitive replacement
+        const regex = new RegExp(`(${currentQuery.trim()})`, 'gi');
+        val = val.replace(regex, '<span class="highlight-term">$1</span>');
+    }
+
+    // Preserve newlines for textarea behavior
+    val = val.replace(/\n/g, "<br>");
+
+    return val;
 }
 
 function handleFiles(files) {
@@ -469,7 +494,7 @@ async function loadGrid(dataUrl, category) {
                 }
             }
 
-            keys.forEach(key => columns.push({ title: key, field: key, headerFilter: "input", width: 150, formatter: "textarea" }));
+            keys.forEach(key => columns.push({ title: key, field: key, headerFilter: "input", width: 150, formatter: highlightFormatter }));
         } else {
             // Forensic Columns
             columns.push(
@@ -495,13 +520,13 @@ async function loadGrid(dataUrl, category) {
                     width: 70,
                     frozen: true
                 },
-                { title: "Timestamp", field: "Timestamp", width: 180, headerFilter: "input" },
+                { title: "Timestamp", field: "Timestamp", frozen: true, width: 180, sorter: "string", headerFilter: "input", formatter: highlightFormatter },
                 // removed "Line" (Record ID) as requested ("literally the same")
-                { title: "EventID", field: "EventID", headerFilter: "input", width: 90 },
-                { title: "Level", field: "Level", headerFilter: "input", width: 90 },
-                { title: "Provider", field: "Provider", headerFilter: "input" },
-                { title: "Computer", field: "Computer", headerFilter: "input" },
-                { title: "Description", field: "Description", formatter: "textarea" },
+                { title: "EventID", field: "EventID", headerFilter: "input", width: 90, formatter: highlightFormatter },
+                { title: "Level", field: "Level", headerFilter: "input", width: 90, formatter: highlightFormatter },
+                { title: "Provider", field: "Provider", headerFilter: "input", formatter: highlightFormatter },
+                { title: "Computer", field: "Computer", headerFilter: "input", formatter: highlightFormatter },
+                { title: "Description", field: "Description", formatter: highlightFormatter },
             );
         }
 
@@ -657,7 +682,7 @@ window.onclick = function (event) {
 }
 
 // Downloads utilizing Backend for FULL file access or Filtered Export
-async function downloadData(format) {
+async function downloadData(format, aiOptimized = false) {
     if (!processedFiles || !processedFiles.csv) {
         // Fallback for purely local data (rare)
         if (table) table.download(format, `Chronos_Export.${format}`, { source: "active" });
@@ -712,9 +737,15 @@ async function downloadData(format) {
 
     // 2. Export via Backend (Filtered or Full) -> Ensures "No." column and Timestamp Formatting
     if (processedFiles && processedFiles.csv) {
-        const btn = document.getElementById(`download-${format}`);
+        let btn;
+        if (aiOptimized) {
+            btn = document.getElementById('download-ai');
+        } else {
+            btn = document.getElementById(`download-${format}`);
+        }
+
         const originalText = btn.innerText;
-        btn.innerText = "Exporting...";
+        btn.innerText = aiOptimized ? "Exporting AI View..." : "Exporting...";
         btn.disabled = true;
 
         try {
@@ -723,12 +754,11 @@ async function downloadData(format) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     filename: processedFiles.csv,
-                    filters: filters,
-                    selected_ids: [],
-                    format: format,
-                    query: currentQuery || "",
-                    start_time: currentStartTime || "",
-                    end_time: currentEndTime || ""
+                    start_time: currentStartTime,
+                    end_time: currentEndTime,
+                    query: currentQuery,
+                    col_filters: currentColumnFilters, // Correctly pass column header filters
+                    ai_optimized: aiOptimized // NEW: Flag to remove empty columns
                 })
             });
 
@@ -754,8 +784,10 @@ async function downloadData(format) {
         } catch (e) {
             alert("Export error: " + e.message);
         } finally {
-            btn.innerText = originalText;
-            btn.disabled = false;
+            if (btn) {
+                btn.innerText = originalText;
+                btn.disabled = false;
+            }
         }
         return;
     }

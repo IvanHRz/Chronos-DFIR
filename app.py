@@ -948,6 +948,7 @@ class ExportRequest(BaseModel):
     query: str = ""
     start_time: str = ""
     end_time: str = ""
+    ai_optimized: bool = False # New Flag
 
 @app.post("/api/export_filtered")
 async def export_filtered(request: ExportRequest):
@@ -1081,6 +1082,25 @@ async def export_filtered(request: ExportRequest):
             lf = lf.drop(cols_to_drop)
         
         df = lf.collect()
+
+        # AI Context Optimization: Remove empty columns
+        if request.ai_optimized:
+            valid_cols = []
+            for col_name in df.columns:
+                c = df[col_name]
+                # Check for completely null
+                if c.null_count() == df.height:
+                    continue
+                # Check for empty strings in Utf8 columns
+                if c.dtype == pl.Utf8:
+                    # If all non-null values are empty strings, drop it
+                    n_empty = c.filter(c.str.contains(r"^\s*$")).len()
+                    if n_empty == df.height:
+                        continue
+                valid_cols.append(col_name)
+            
+            if valid_cols:
+                df = df.select(valid_cols)
         
         # Write based on format
         if request.format == "xlsx":
