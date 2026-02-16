@@ -274,16 +274,14 @@ async def get_data(filename: str, page: int = 1, size: int = 50, query: Optional
             if query and query.strip():
                 import functools, operator
                 q_lower = query.strip().lower()
-                # 1. Inspect schema to find string-like cols (Utf8/String)
-                string_cols = [name for name, dtype in schema.items() if dtype in [pl.String, pl.Utf8]]
+                # 1. Search ALL columns in the schema, casting to Utf8
+                all_cols = schema.names()
                 
-                if string_cols:
-                    # Construct expression: (col1 contains Q) OR (col2 contains Q) ...
-                    # literal=True avoids regex errors with chars like '.' or '-'
-                    # fill_null(False) prevents a null in one column from 'poisoning' the whole row search
+                if all_cols:
+                    # literal=True avoids regex errors, fill_null(False) handles missing values
                     filters = [
                         pl.col(c).cast(pl.Utf8).str.to_lowercase().str.contains(q_lower, literal=True).fill_null(False) 
-                        for c in string_cols
+                        for c in all_cols
                     ]
                     
                     if filters:
@@ -300,7 +298,7 @@ async def get_data(filename: str, page: int = 1, size: int = 50, query: Optional
                             lf = lf.filter(
                                 pl.col(col_name).cast(pl.Utf8).str.to_lowercase().str.contains(
                                     col_value.lower(), literal=True
-                                )
+                                ).fill_null(False)
                             )
                 except Exception as e:
                     print(f"Warning: Failed to parse col_filters in get_data: {e}")
@@ -446,7 +444,7 @@ def analyze_dataframe(df_source, target_bars=50, start_time: str = None, end_tim
             traceback.print_exc()
             return {"error": f"Failed to parse dates in column '{time_col}': {str(e)}"}
         if full_df.height == 0:
-            return {"error": "No valid timestamps found"}
+            return {"error": "No matches found (0 rows match current filters)"}
         
         # Ensure sorted for group_by_dynamic and proper range stats
         full_df = full_df.sort("ts")
@@ -775,12 +773,12 @@ async def get_histogram(filename: str, exclude_id: str = None, start_time: str =
         if query and query.strip():
             import functools, operator
             q_lower = query.strip().lower()
-            string_cols = [name for name, dtype in df.schema.items() if dtype in [pl.String, pl.Utf8]]
-            if string_cols:
-                # literal=True for robust matching, fill_null(False) to handle missing values
+            all_cols = df.columns
+            if all_cols:
+                # Search ALL columns, literal=True for robust matching, fill_null(False) for null safety
                 search_filters = [
                     pl.col(c).cast(pl.Utf8).str.to_lowercase().str.contains(q_lower, literal=True).fill_null(False) 
-                    for c in string_cols
+                    for c in all_cols
                 ]
                 combined_filter = functools.reduce(operator.or_, search_filters)
                 df = df.filter(combined_filter)
@@ -792,11 +790,11 @@ async def get_histogram(filename: str, exclude_id: str = None, start_time: str =
                 filters = json.loads(col_filters)
                 for col_name, col_value in filters.items():
                     if col_name in df.columns and col_value:
-                        # Case-insensitive contains match (same as Tabulator headerFilter behavior)
+                        # Case-insensitive contains match, literal=True, fill_null(False)
                         df = df.filter(
                             pl.col(col_name).cast(pl.Utf8).str.to_lowercase().str.contains(
                                 col_value.lower(), literal=True
-                            )
+                            ).fill_null(False)
                         )
             except Exception as e:
                 print(f"Warning: Failed to parse col_filters: {e}")
