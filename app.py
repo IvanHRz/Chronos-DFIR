@@ -272,18 +272,20 @@ async def get_data(filename: str, page: int = 1, size: int = 50, query: Optional
 
             # GLOBAL SEARCH LOGIC (Apply before pagination)
             if query and query.strip():
-                # Search across all String columns
-                # 1. Inspect schema to find string cols
-                # schema already collected above or re-collect
-                string_cols = [name for name, dtype in schema.items() if dtype == pl.String]
+                import functools, operator
+                q_lower = query.strip().lower()
+                # 1. Inspect schema to find string-like cols (Utf8/String)
+                string_cols = [name for name, dtype in schema.items() if dtype in [pl.String, pl.Utf8]]
                 
                 if string_cols:
                     # Construct expression: (col1 contains Q) OR (col2 contains Q) ...
-                    # Use case-insensitive
-                    filters = [pl.col(c).str.to_lowercase().str.contains(query.lower()) for c in string_cols]
+                    # literal=True avoids regex errors with chars like '.' or '-'
+                    # fill_null(False) prevents a null in one column from 'poisoning' the whole row search
+                    filters = [
+                        pl.col(c).cast(pl.Utf8).str.to_lowercase().str.contains(q_lower, literal=True).fill_null(False) 
+                        for c in string_cols
+                    ]
                     
-                    # Combine with OR using specific syntax
-                    import functools, operator
                     if filters:
                         combined_filter = functools.reduce(operator.or_, filters)
                         lf = lf.filter(combined_filter)
@@ -773,9 +775,13 @@ async def get_histogram(filename: str, exclude_id: str = None, start_time: str =
         if query and query.strip():
             import functools, operator
             q_lower = query.strip().lower()
-            string_cols = [name for name, dtype in df.schema.items() if dtype == pl.String or dtype == pl.Utf8]
+            string_cols = [name for name, dtype in df.schema.items() if dtype in [pl.String, pl.Utf8]]
             if string_cols:
-                search_filters = [pl.col(c).cast(pl.Utf8).str.to_lowercase().str.contains(q_lower, literal=True) for c in string_cols]
+                # literal=True for robust matching, fill_null(False) to handle missing values
+                search_filters = [
+                    pl.col(c).cast(pl.Utf8).str.to_lowercase().str.contains(q_lower, literal=True).fill_null(False) 
+                    for c in string_cols
+                ]
                 combined_filter = functools.reduce(operator.or_, search_filters)
                 df = df.filter(combined_filter)
 
