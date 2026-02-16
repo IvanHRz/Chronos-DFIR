@@ -275,14 +275,29 @@ async def get_data(filename: str, page: int = 1, size: int = 50, query: Optional
                 q_lower = query.strip().lower()
                 all_cols = schema.names()
                 if all_cols:
-                    # Search ALL columns lazily by casting to Utf8
-                    # any_horizontal is much faster than cross-column reduce
-                    lf = lf.filter(
-                        pl.any_horizontal(
-                            pl.col(c).cast(pl.Utf8).str.to_lowercase().str.contains(q_lower, literal=True).fill_null(False)
-                            for c in all_cols
+                    try:
+                        # Attempt optimized parallel search
+                        lf = lf.filter(
+                            pl.any_horizontal(
+                                pl.col(c).cast(pl.Utf8).str.to_lowercase().str.contains(q_lower, literal=True).fill_null(False)
+                                for c in all_cols
+                            )
                         )
-                    )
+                    except Exception as e:
+                        print(f"Global search optimization failed: {e}. Falling back to safe iterative search.")
+                        # Fallback: Safe iterative search
+                        import functools, operator
+                        safe_filters = []
+                        for c in all_cols:
+                            try:
+                                safe_filters.append(
+                                    pl.col(c).cast(pl.Utf8, strict=False).str.to_lowercase().str.contains(q_lower, literal=True).fill_null(False)
+                                )
+                            except Exception:
+                                continue # Skip columns that fail to cast
+                        
+                        if safe_filters:
+                            lf = lf.filter(functools.reduce(operator.or_, safe_filters))
 
             # --- COLUMN HEADER FILTERS (from Tabulator) ---
             if col_filters and col_filters.strip():
@@ -770,12 +785,25 @@ async def get_histogram(filename: str, exclude_id: str = None, start_time: str =
             q_lower = query.strip().lower()
             all_cols = df.columns
             if all_cols:
-                df = df.filter(
-                    pl.any_horizontal(
-                        pl.col(c).cast(pl.Utf8).str.to_lowercase().str.contains(q_lower, literal=True).fill_null(False)
-                        for c in all_cols
+                try:
+                    df = df.filter(
+                        pl.any_horizontal(
+                            pl.col(c).cast(pl.Utf8).str.to_lowercase().str.contains(q_lower, literal=True).fill_null(False)
+                            for c in all_cols
+                        )
                     )
-                )
+                except Exception as e:
+                    print(f"Chart search optimization failed: {e}. Falling back to iterative search.")
+                    import functools, operator
+                    filters = []
+                    for c in all_cols:
+                        try:
+                            filters.append(
+                                pl.col(c).cast(pl.Utf8, strict=False).str.to_lowercase().str.contains(q_lower, literal=True).fill_null(False)
+                            )
+                        except: pass
+                    if filters:
+                        df = df.filter(functools.reduce(operator.or_, filters))
 
         # Apply Column Header Filters (from Tabulator)
         if col_filters and col_filters.strip():

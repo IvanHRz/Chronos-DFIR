@@ -8,6 +8,8 @@
     <!-- Tabulator CSS -->
     <link href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator_midnight.min.css" rel="stylesheet">
     <script type="text/javascript" src="https://oss.sheetjs.com/sheetjs/xlsx.full.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/themes/dark.css">
     <link rel="stylesheet" href="/static/style.css">
 </head>
 
@@ -59,10 +61,12 @@
                     N/A</span>
 
                 <label style="color: #aaa;">From:</label>
-                <input type="datetime-local" id="time-start" class="search-input" style="padding: 5px;">
+                <input type="text" id="time-start" class="search-input date-picker" placeholder="YYYY-MM-DD HH:mm"
+                    style="padding: 5px;">
 
                 <label style="color: #aaa;">To:</label>
-                <input type="datetime-local" id="time-end" class="search-input" style="padding: 5px;">
+                <input type="text" id="time-end" class="search-input date-picker" placeholder="YYYY-MM-DD HH:mm"
+                    style="padding: 5px;">
 
                 <button id="filter-time-btn" class="btn-sm" style="background: #00bcd4; color: #000;">Filter
                     Time</button>
@@ -109,7 +113,8 @@
 
         <!-- Scripts -->
         <script type="text/javascript" src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
-        <script src="/static/script.js?v=55"></script>
+        <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+        <script src="/static/script.js?v=56"></script>
 
 </body>
 

@@ -54,10 +54,16 @@ function resetAppState() {
     if (recordCountEl) recordCountEl.innerText = "0 Records Loaded";
 
     const startIn = document.getElementById('time-start');
-    if (startIn) startIn.value = "";
+    if (startIn) {
+        if (startIn._flatpickr) startIn._flatpickr.clear();
+        startIn.value = "";
+    }
 
     const endIn = document.getElementById('time-end');
-    if (endIn) endIn.value = "";
+    if (endIn) {
+        if (endIn._flatpickr) endIn._flatpickr.clear();
+        endIn.value = "";
+    }
 
     const interp = document.getElementById('chart-interpretation');
     if (interp) {
@@ -197,6 +203,16 @@ function handleDrop(e) {
 }
 
 function handleFiles(files) {
+    // Initialize Flatpickr for 24h Time Selection
+    if (window.flatpickr) {
+        flatpickr(".date-picker", {
+            enableTime: true,
+            dateFormat: "Y-m-d H:i",
+            time_24hr: true,
+            allowInput: true
+        });
+    }
+
     if (files.length > 0) {
         selectedFile = files[0];
         document.getElementById('upload-status').innerText = `Selected: ${selectedFile.name}`;
