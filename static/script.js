@@ -218,6 +218,27 @@ let columnsWithHits = new Set();
 function highlightFormatter(cell, formatterParams, onRendered) {
     let val = cell.getValue();
     if (val === null || val === undefined) return "";
+
+    // EPOCH DATE FORMATTING
+    if (formatterParams && formatterParams.isEpoch) {
+        let num = parseFloat(val);
+        if (!isNaN(num)) {
+            // Heuristic: If > 1 trillion, assume milliseconds. Else seconds.
+            // Year 2000 in ms = ~9.4e11. Year 2000 in sec = ~9.4e8.
+            let date = new Date(num > 946684800000 ? num : num * 1000);
+
+            // Format to YYYY-MM-DD HH:MM:SS
+            // Using localized ISO-like format
+            let yyyy = date.getFullYear();
+            let mm = String(date.getMonth() + 1).padStart(2, '0');
+            let dd = String(date.getDate()).padStart(2, '0');
+            let hh = String(date.getHours()).padStart(2, '0');
+            let min = String(date.getMinutes()).padStart(2, '0');
+            let ss = String(date.getSeconds()).padStart(2, '0');
+            val = `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+        }
+    }
+
     val = String(val);
 
     // HTML Escape first
@@ -548,7 +569,45 @@ async function loadGrid(dataUrl, category) {
                 }
             }
 
-            keys.forEach(key => columns.push({ title: key, field: key, headerFilter: "input", width: 150, formatter: highlightFormatter }));
+            keys.forEach(key => {
+                let colDef = {
+                    title: key,
+                    field: key,
+                    headerFilter: "input",
+                    width: 150,
+                    formatter: highlightFormatter,
+                    formatterParams: {}
+                };
+
+                // Auto-detect Epoch Timestamp
+                // Heuristic: Check first row value + Column Name keywords
+                let sampleVal = data.length > 0 ? data[0][key] : null;
+                let isEpoch = false;
+
+                // 1. Check numeric range (Year 2000 - 2100 approx)
+                if (sampleVal !== null && !isNaN(sampleVal)) {
+                    let num = parseFloat(sampleVal);
+                    // Sec: > 9e8, MS: > 9e11
+                    if (num > 900000000) {
+                        // 2. Strong signal: Keywords in column name
+                        const timeKeywords = /time|date|seen|created|modified|timestamp|last|start|end/i;
+                        if (timeKeywords.test(key)) {
+                            isEpoch = true;
+                        }
+                        // 3. Strong signal: Very large number (ms timestamp)
+                        else if (num > 900000000000) {
+                            isEpoch = true;
+                        }
+                    }
+                }
+
+                if (isEpoch) {
+                    colDef.formatterParams.isEpoch = true;
+                    colDef.width = 180; // Widen for date string
+                }
+
+                columns.push(colDef);
+            });
         } else {
             // Forensic Columns
             columns.push(
@@ -586,14 +645,15 @@ async function loadGrid(dataUrl, category) {
 
         // 3. Initialize Tabulator
         let tableConfig = {
-            layout: "fitColumns",
+            layout: "fitData", // Performance optimization: faster than fitDataFill
             // height: "100%", // CSS "100%" can fail in some flex layouts
             height: "600px",  // Forced height to ensure rendering
             theme: "midnight",
             movableColumns: true,
-            nestedFieldSeparator: false,
-            // UX OPTIMIZATION: Virtual rendering for faster column reordering
-            renderHorizontal: "virtual",
+            layoutColumnsOnNewData: false, // Prevent re-layout on data load for speed
+            // UX OPTIMIZATION: Virtual rendering DISABLED to prevent drag issues
+            renderHorizontal: "virtual", // Reverting to virtual as "basic" caused blank table
+            // renderHorizontalBuffer: 15000, // Not needed if virtual is false
             columns: columns,
 
             // ROW SELECTION
@@ -1223,8 +1283,97 @@ function renderChart(data) {
     // Determine if we have global context (filtered view)
     const gs = data.global_stats || null;
 
-    // Build chart datasets — NO reference lines, use tooltips for context
-    const chartDatasets = [...(data.datasets || [])];
+    // Build chart datasets 
+    // Modify styles for "Activity" vars to be "dotted" (border only, dashed)
+    // Modify "Trend" to be smooth
+    // Add "Peaks" dataset
+
+    const chartDatasets = [];
+
+    // 1. Process existing datasets (Activity & Trend)
+    (data.datasets || []).forEach(ds => {
+        if (ds.type === 'line' && (ds.label === 'Trend' || ds.label === 'Tendencia')) {
+            // Improve Trend Visuals
+            ds.tension = 0.4; // Smooth
+            ds.cubicInterpolationMode = 'monotone'; // More organic
+            ds.borderColor = '#FFFF00'; // Bright Yellow for high visibility
+            ds.backgroundColor = 'rgba(255, 255, 0, 0.1)';
+            ds.borderWidth = 3; // Thicker line
+            ds.fill = true;
+            chartDatasets.push(ds);
+        } else if (ds.label === 'Anomaly (> 2σ)') {
+            chartDatasets.push(ds);
+        } else {
+            // Activity Bars -> "Dotted" style
+            // We simulate "dotted bars" by making them transparent with a dashed border
+            // If user wants them "filled but dotted", we'd need a pattern. 
+            // "Las barras eran lineas punteadas" -> Dotted outlines?
+            // Let's try: Transparent fill, strong colored border, dashed.
+
+            const baseColor = ds.backgroundColor || '#3399ff';
+
+            // Clone to avoid mutating original ref if needed
+            const newDs = { ...ds };
+            newDs.backgroundColor = baseColor; // Keep fill for visibility, maybe reduce opacity?
+            newDs.backgroundColor = 'transparent'; // As requested "dotted lines" implies outline
+            newDs.borderColor = baseColor;
+            newDs.borderWidth = 2;
+            newDs.borderSkipped = false; // Border on all sides
+            newDs.borderDash = [3, 3]; // Dotted effect
+
+            // Make them pop a bit more if they are transparent
+            if (ds.label.includes('Alta')) {
+                newDs.borderColor = '#ff6600';
+            }
+
+            chartDatasets.push(newDs);
+        }
+    });
+
+    // 2. Add "Peaks" dataset (Red Arrows)
+    // Identify local maxima or just high values? User said "picos... flecha roja"
+    // Let's mark topmost peaks (e.g. > 80% of global max)
+
+    // We need to reconstruct the total volume array to find peaks
+    // Assuming data.datasets has the volume data. 
+    // But data.datasets is stacked... finding "peaks" of the STACK is hard without summing.
+    // data.global_stats has max_bucket, but we don't have the per-bucket totals easily here unless we sum.
+    // Let's extract the "Trend" dataset or sum the bars if possible.
+    // Actually, "Trend" (SMA) is a good proxy, or we can just iterate the labels and sum segments.
+
+    // Simple approach: Use data.datasets to sum volumes per index
+    if (data.datasets) {
+        const totals = new Array(data.labels.length).fill(0);
+        data.datasets.forEach(ds => {
+            if (ds.type !== 'line' && ds.type !== 'scatter' && !ds.hidden) {
+                ds.data.forEach((val, i) => {
+                    totals[i] += (val || 0);
+                });
+            }
+        });
+
+        const maxVal = Math.max(...totals);
+        const peakThreshold = maxVal * 0.8; // Mark peaks > 80% max
+
+        const peakData = totals.map(v => (v >= peakThreshold && v > 0) ? v + (maxVal * 0.05) : null); // Lift arrow slightly above bar
+
+        chartDatasets.push({
+            label: 'Peaks',
+            data: peakData,
+            type: 'scatter',
+            backgroundColor: 'red',
+            borderColor: 'red',
+            pointStyle: 'triangle',
+            rotation: 180, // Point down
+            pointRadius: 6,
+            order: 0,
+            tooltip: {
+                callbacks: {
+                    label: (context) => `Peak: ${Math.round(totals[context.dataIndex])}`
+                }
+            }
+        });
+    }
 
     // Config
     chartInstance = new Chart(ctx, {

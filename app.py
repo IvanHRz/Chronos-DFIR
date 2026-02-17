@@ -229,9 +229,14 @@ async def get_data(filename: str, page: int = 1, size: int = 50, query: Optional
             # Try to find time column
             time_col = None
             schema = lf.collect_schema()
-            candidates = ['time', 'timestamp', 'date', 'datetime', 'insert_timestamp', '_time', 'eventtime', 'creationtime', 'logtime', 'time_created', 'date_time', 'start_time', 'end_time']
+            candidates = [
+                'time', 'timestamp', 'date', 'datetime', 'insert_timestamp', 
+                '_time', 'eventtime', 'creationtime', 'logtime', 'time_created', 
+                'date_time', 'start_time', 'end_time', 'testtime', 
+                'object first seen', 'first seen', 'last seen', 'creation time'
+            ]
             for col in schema.keys():
-                if col.lower() in candidates:
+                if any(c in col.lower() for c in candidates): # Partial match for robustness
                     time_col = col
                     break
             
@@ -315,9 +320,14 @@ async def get_data(filename: str, page: int = 1, size: int = 50, query: Optional
                     print(f"Warning: Failed to parse col_filters in get_data: {e}")
             # --- SORT BY TIMESTAMP (Timeline Order) ---
             time_col_sort = None
-            time_candidates = ['time', 'timestamp', 'date', 'datetime', 'insert_timestamp', '_time', 'eventtime', 'creationtime', 'logtime', 'time_created', 'date_time', 'start_time', 'end_time']
+            time_candidates_sort = [
+                'time', 'timestamp', 'date', 'datetime', 'insert_timestamp', 
+                '_time', 'eventtime', 'creationtime', 'logtime', 'time_created', 
+                'date_time', 'start_time', 'end_time', 'testtime', 
+                'object first seen', 'first seen', 'last seen', 'creation time'
+            ]
             for col_name in schema.keys():
-                if col_name.lower() in time_candidates:
+                if any(c in col_name.lower() for c in time_candidates_sort):
                     time_col_sort = col_name
                     break
 
@@ -378,9 +388,14 @@ def analyze_dataframe(df_source, target_bars=50, start_time: str = None, end_tim
     try:
         # 1. Parsing Time
         time_col = None
-        candidates = ['time', 'timestamp', 'date', 'datetime', 'insert_timestamp', '_time', 'eventtime', 'creationtime', 'logtime', 'time_created', 'date_time', 'start_time', 'end_time']
+        candidates = [
+            'time', 'timestamp', 'date', 'datetime', 'insert_timestamp', 
+            '_time', 'eventtime', 'creationtime', 'logtime', 'time_created', 
+            'date_time', 'start_time', 'end_time', 'testtime', 
+            'object first seen', 'first seen', 'last seen', 'creation time'
+        ]
         for col in df_source.columns:
-            if col.lower() in candidates:
+            if any(c in col.lower() for c in candidates):
                 time_col = col
                 break
         
@@ -406,13 +421,27 @@ def analyze_dataframe(df_source, target_bars=50, start_time: str = None, end_tim
 
             # We construct a list of expressions to try
             # Note: strict=False returns null on failure
+            
+            # Epoch Handling: Detect Seconds vs Milliseconds
+            # If value is < 30,000,000,000 (Year 2920), it's likely Seconds. 
+            # If > 30,000,000,000, it's likely Milliseconds or Nanoseconds.
+            # We try to normalize to MS first.
+            
+            # CRITICAL FIX: Cast to Float64 first to handle strings like "1771091129.240"
+            c_float = c_time.cast(pl.Float64, strict=False)
+            c_int = c_float.cast(pl.Int64)
+            
+            
             q_base = q_base.with_columns(
                 pl.coalesce([
-                    # Strict numeric parsing first
-                    pl.from_epoch(c_time.cast(pl.Int64, strict=False), time_unit="ms"), # Unix Timestamp (ms)
-                    pl.from_epoch(c_time.cast(pl.Int64, strict=False), time_unit="s"), # Unix Timestamp (s)
-                    pl.from_epoch(c_time.cast(pl.Int64, strict=False), time_unit="us"), # Unix Timestamp (us)
-                    pl.from_epoch(c_time.cast(pl.Int64, strict=False), time_unit="ns"), # Unix Timestamp (ns)
+                    # Smart Epoch Logic
+                    pl.when(c_int < 30000000000).then(pl.from_epoch(c_int * 1000, time_unit="ms"))
+                      .otherwise(pl.from_epoch(c_int, time_unit="ms")),
+                      
+                    # Fallback to standard units if the smart logic misses (e.g. microseconds)
+                    pl.from_epoch(c_time.cast(pl.Int64, strict=False), time_unit="us"), 
+                    pl.from_epoch(c_time.cast(pl.Int64, strict=False), time_unit="ns"), 
+                    
                     # Strict string parsing next
                     c_time_str.str.to_datetime("%Y-%m-%dT%H:%M:%S%.f", strict=False), # ISO 8601 full
                     c_time_str.str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False), # ISO 8601 no frac
@@ -618,7 +647,7 @@ def analyze_dataframe(df_source, target_bars=50, start_time: str = None, end_tim
 
         # 4. Moving Average (Trend)
         pivoted = pivoted.with_columns(
-            pl.col("total_volume").rolling_mean(window_size=5).fill_null(0).alias("trend_sma")
+            pl.col("total_volume").rolling_mean(window_size=5, min_periods=1).alias("trend_sma")
         )
         
         # 5. Anomaly Detection

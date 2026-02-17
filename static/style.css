@@ -7,8 +7,14 @@ body {
 }
 
 .container {
-    max-width: 1200px;
+    max-width: 95% !important;
+    /* Expanded from 1200px */
     margin: 0 auto;
+}
+
+/* Remove focus outline for cleaner cell selection */
+.tabulator-cell:focus {
+    outline: none !important;
 }
 
 header {
@@ -251,4 +257,8 @@ select {
 #timeline-table .tabulator-tableholder {
     overflow-x: auto;
     overflow-y: auto;
+    /* PERFORMANCE: Isolate layout/paint to improve scroll speed */
+    contain: strict;
+    /* Disable smooth scroll for snappier drag-auto-scroll */
+    scroll-behavior: auto !important;
 }
