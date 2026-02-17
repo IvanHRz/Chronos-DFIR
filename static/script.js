@@ -108,8 +108,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const dlXlsx = document.getElementById('download-xlsx');
     if (dlXlsx) dlXlsx.addEventListener('click', () => downloadData('xlsx'));
 
-    const dlAi = document.getElementById('download-ai');
-    if (dlAi) dlAi.addEventListener('click', () => downloadData('csv', true));
+    // AI Context Download
+    document.getElementById('download-ai').addEventListener('click', () => downloadData('csv', true));
+
+    // Hide Empty Columns Toggle
+    const hideEmptyBtn = document.getElementById('toggle-empty-cols');
+    if (hideEmptyBtn) {
+        hideEmptyBtn.addEventListener('click', toggleEmptyColumns);
+    }
 
     // Filter Button Logic
     bindFilterButton();
@@ -206,6 +212,9 @@ function handleDrop(e) {
 }
 
 // Custom Formatter for Search Highlighting
+// Helper to track columns with search hits
+let columnsWithHits = new Set();
+
 function highlightFormatter(cell, formatterParams, onRendered) {
     let val = cell.getValue();
     if (val === null || val === undefined) return "";
@@ -218,7 +227,11 @@ function highlightFormatter(cell, formatterParams, onRendered) {
     if (currentQuery && currentQuery.trim().length > 0) {
         // Case insensitive replacement
         const regex = new RegExp(`(${currentQuery.trim()})`, 'gi');
-        val = val.replace(regex, '<span class="highlight-term">$1</span>');
+        if (regex.test(val)) {
+            // Mark this column as having a hit
+            columnsWithHits.add(cell.getColumn().getField());
+            val = val.replace(regex, '<span class="highlight-term">$1</span>');
+        }
     }
 
     // Preserve newlines for textarea behavior
@@ -226,6 +239,48 @@ function highlightFormatter(cell, formatterParams, onRendered) {
 
     return val;
 }
+
+let hidingEmpty = false;
+function toggleEmptyColumns() {
+    if (!table) return;
+    const btn = document.getElementById('toggle-empty-cols');
+
+    if (hidingEmpty) {
+        // Show All
+        table.getColumns().forEach(col => col.show());
+        hidingEmpty = false;
+        btn.innerText = "Hide Empty";
+        btn.style.background = "#607d8b"; // Blue-grey
+    } else {
+        // Hide Empty
+        const visibleRows = table.getRows("active"); // Get rows in current filter/page view
+        // Note: For remote pagination, this only checks current page. Good for performance.
+
+        let colsToHide = [];
+        const columns = table.getColumns();
+
+        columns.forEach(col => {
+            let field = col.getField();
+            if (field === "_id" || field === "Timestamp" || field === "EventID") return; // Always show key columns
+
+            let isEmpty = true;
+            for (let row of visibleRows) {
+                let val = row.getData()[field];
+                if (val !== null && val !== undefined && val !== "" && String(val).trim() !== "") {
+                    isEmpty = false;
+                    break;
+                }
+            }
+            if (isEmpty) colsToHide.push(col);
+        });
+
+        colsToHide.forEach(col => col.hide());
+        hidingEmpty = true;
+        btn.innerText = "Show All";
+        btn.style.background = "#4caf50"; // Green
+    }
+}
+
 
 function handleFiles(files) {
     // Initialize Flatpickr for 24h Time Selection
@@ -485,7 +540,6 @@ async function loadGrid(dataUrl, category) {
             } else {
                 // If source has "No.", add it back to keys or handle explicitly?
                 // keys filtered it out. Let's add it explicitly if it exists.
-                // Actually, if we filtered it out from 'keys', we need to add it back as a column if we want it shown.
                 // But wait, if it exists, we want to use THAT one.
                 // So we should find the key that matched 'no.' and add it.
                 const noKey = Object.keys(data[0]).find(k => k.toLowerCase() === 'no.');
@@ -538,6 +592,8 @@ async function loadGrid(dataUrl, category) {
             theme: "midnight",
             movableColumns: true,
             nestedFieldSeparator: false,
+            // UX OPTIMIZATION: Virtual rendering for faster column reordering
+            renderHorizontal: "virtual",
             columns: columns,
 
             // ROW SELECTION
@@ -601,6 +657,22 @@ async function loadGrid(dataUrl, category) {
         }
 
         table = new Tabulator("#timeline-table", tableConfig);
+
+        // UX: Auto-expand columns with search hits
+        table.on("dataFiltered", function (filters, rows) {
+            if (currentQuery && columnsWithHits.size > 0) {
+                // Determine appropriate width (e.g., 300px or auto)
+                columnsWithHits.forEach(field => {
+                    const col = table.getColumn(field);
+                    if (col) {
+                        col.setWidth(300); // Expand to show context
+                        // col.scrollTo(); // Optional: scroll to first hit? might be annoying
+                    }
+                });
+                // Reset for next search
+                columnsWithHits.clear();
+            }
+        });
 
         // Restore Event Handlers
         table.on("cellClick", function (e, cell) {
