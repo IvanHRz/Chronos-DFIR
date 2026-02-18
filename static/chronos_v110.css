@@ -1,0 +1,204 @@
+/* 
+   Chronos Core V110 Styles
+   Refined for M4 Forensics Box
+*/
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+    --bg-body: #020617;
+    --bg-surface: #0f172a;
+    --bg-element: #1e293b;
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    --accent-primary: #38bdf8;
+    --accent-hover: #7dd3fc;
+    --accent-subtle: rgba(56, 189, 248, 0.1);
+    --border-color: #33415533;
+    --success: #22c55e;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    --radius-md: 4px;
+    --font-sans: 'Inter', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+    font-family: var(--font-sans);
+    background-color: var(--bg-body);
+    color: var(--text-primary);
+    margin: 0;
+    padding: 0;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+header {
+    border-bottom: 2px solid var(--accent-primary);
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+}
+
+header h1 {
+    font-size: 2rem;
+    margin: 0;
+    letter-spacing: -0.05em;
+    font-weight: 600;
+}
+
+.version-badge {
+    font-size: 0.7rem;
+    background: var(--bg-element);
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 10px;
+    vertical-align: middle;
+}
+
+/* Upload Section */
+.upload-section {
+    background: var(--bg-surface);
+    border: 1px dashed var(--accent-primary);
+    padding: 40px;
+    text-align: center;
+    border-radius: var(--radius-md);
+    margin-bottom: 20px;
+    transition: all 0.3s ease;
+}
+
+.upload-section:hover {
+    background: var(--accent-subtle);
+}
+
+.button {
+    background: var(--accent-primary);
+    color: var(--bg-body);
+    padding: 10px 20px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 600;
+    display: inline-block;
+    transition: transform 0.1s;
+}
+
+.button:active { transform: scale(0.98); }
+
+/* Controls */
+.controls select, .btn-primary {
+    background: var(--bg-element);
+    color: white;
+    border: 1px solid var(--border-color);
+    padding: 8px 15px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.btn-primary {
+    background: var(--accent-primary);
+    color: var(--bg-body);
+    font-weight: 700;
+}
+
+/* Tabulator Overrides */
+.tabulator {
+    background: var(--bg-surface) !important;
+    border: 1px solid var(--border-color) !important;
+    font-family: var(--font-mono);
+}
+
+.tabulator-header {
+    background: var(--bg-body) !important;
+    color: var(--text-secondary) !important;
+    border-bottom: 1px solid var(--accent-primary) !important;
+}
+
+.tabulator-col {
+    background: var(--bg-body) !important;
+}
+
+.tabulator-row {
+    background: transparent !important;
+    border-bottom: 1px solid var(--border-color) !important;
+}
+
+.tabulator-row-even { background: rgba(255,255,255,0.02) !important; }
+
+.tabulator-row:hover {
+    background: var(--accent-subtle) !important;
+}
+
+.tabulator-cell {
+    border-right: 1px solid var(--border-color) !important;
+}
+
+/* Modal */
+.modal-content {
+    background: var(--bg-surface);
+    border: 1px solid var(--accent-primary);
+    color: var(--text-primary);
+}
+
+#modal-text {
+    background: #000;
+    color: #0f0;
+    padding: 20px;
+    font-family: var(--font-mono);
+}
+
+/* Output Controls / Toolbar */
+.output-controls {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 15px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.search-input {
+    background: var(--bg-element);
+    border: 1px solid var(--border-color);
+    color: white;
+    padding: 8px 12px;
+    border-radius: 4px;
+    min-width: 300px;
+}
+
+.divider-vertical {
+    width: 1px;
+    height: 25px;
+    background: var(--border-color);
+}
+
+/* Animations */
+@keyframes pulse {
+    0% { opacity: 0.6; }
+    50% { opacity: 1; }
+    100% { opacity: 0.6; }
+}
+
+.uploading { animation: pulse 1s infinite; }
+
+/* Grid specific enhancements */
+.tabulator-row .tabulator-cell[field="Level"] {
+    font-weight: bold;
+}
+
+/* Styling for different logs levels */
+.level-critical { color: var(--danger); text-shadow: 0 0 5px var(--danger); }
+.level-warning { color: var(--warning); }
+.level-info { color: var(--accent-primary); }
+
+/* Extra spacing fix as requested by user */
+.container { min-height: 80vh; }
