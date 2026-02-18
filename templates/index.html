@@ -10,23 +10,17 @@
     <script type="text/javascript" src="https://oss.sheetjs.com/sheetjs/xlsx.full.min.js"></script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/themes/dark.css">
-    <link rel="stylesheet" href="/static/style.css?v=62">
-    <style>
-        .highlight-term {
-            background-color: #ffeb3b;
-            color: #000;
-            font-weight: bold;
-            padding: 2px 4px;
-            border-radius: 3px;
-        }
-    </style>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/themes/dark.css">
+    <link rel="stylesheet" href="/static/chronos_v110.css?v=115">
+
 </head>
 
 <body>
 
     <div class="container">
         <header>
-            <h1>Chronos-DFIR <span class="badge">BETA</span></h1>
+            <h1>Chronos-DFIR <span class="version-badge">BETA 1.1</span> <span class="version-badge"
+                    style="background:var(--accent-primary); color:white;">v115</span></h1>
             <p>Advanced Forensic Artifact Timeline Explorer</p>
         </header>
 
@@ -44,90 +38,123 @@
                 <option value="EVTX">EVTX (Event Logs)</option>
                 <option value="MFT">MFT (NTFS)</option>
             </select>
+            <!-- Artifact Select -->
+        </div>
+        <div style="text-align: center; margin-top: 10px; margin-bottom: 10px;">
             <button id="process-btn" class="btn-primary">Process Artifact</button>
+            <button id="reset-view-btn" class="btn-secondary" onclick="resetView()" style="margin-left: 10px;">Reset
+                View ⟳</button>
         </div>
+    </div>
 
-        <div id="results-area" class="hidden">
-            <!-- Chart.js -->
-            <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <div id="results-area" class="hidden">
+        <!-- Chart.js -->
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-            <!-- Toolbar -->
-            <div class="toolbar" style="display: flex; gap: 10px; padding: 10px; align-items: center;">
-                <button id="download-csv" class="btn">Download CSV</button>
-                <button id="download-excel" class="btn">Download Excel</button>
-                <button id="download-split" class="btn" title="Split into 100MB chunks (Zip)">Download Split
-                    (Zip)</button>
-                <button id="download-ai" class="btn" style="background: #9c27b0; color: white;"
-                    title="Export filtered view without empty columns (Context Optimized)">Download AI Context</button>
-                <button id="toggle-empty-cols" class="btn" style="background: #607d8b; color: white;"
-                    title="Hide/Show columns with no data in current view">Hide Empty</button>
-                <button id="filter-selection-btn" class="btn">Filter Selection</button>
-                <input type="text" id="global-search" class="search-input" placeholder="Global Search (All Columns)..."
-                    style="flex-grow: 1; padding: 8px;">
-                <span id="record-count">0 Records Loaded</span>
+        <!-- Toolbar -->
+        <!-- Toolbar -->
+        <div class="output-controls">
+            <!-- Global Reset (Always Visible) -->
+            <button id="reset-view-btn-toolbar" class="btn-secondary" onclick="resetView()">Reset View ⟳</button>
+
+            <div class="divider-vertical"></div>
+
+            <button id="download-csv" class="btn-secondary">CSV</button>
+            <button id="download-excel" class="btn-secondary">Excel</button>
+            <button id="download-split" class="btn-secondary" title="Split into 100MB chunks (Zip)">Zip (Split)</button>
+
+            <div class="divider-vertical"></div>
+
+            <!-- Time Filter Group -->
+            <div class="control-group" id="time-filter-container">
+                <span class="control-group-label">Time</span>
+                <input type="text" id="time-start" class="date-picker" placeholder="Start" style="width: 130px;">
+                <input type="text" id="time-end" class="date-picker" placeholder="End" style="width: 130px;">
+                <button id="filter-time-btn" class="btn-secondary btn-sm">Filter</button>
+                <button id="clear-time-btn" class="btn-danger btn-sm" style="display:none;"
+                    title="Clear Time Filter">✕</button>
             </div>
 
-            <!-- Time Controls & Info -->
-            <div class="time-controls"
-                style="display: flex; gap: 10px; padding: 10px; align-items: center; background: #1a1a1a; border-bottom: 2px solid #333;">
-                <span id="time-range-info" style="color: #00bcd4; font-weight: bold; margin-right: 15px;">Time Range:
-                    N/A</span>
+            <!-- Global Search -->
+            <input type="text" id="global-search" class="search-input" placeholder="Global Search..."
+                style="flex-grow: 1; min-width: 200px;">
 
-                <label style="color: #aaa;">From:</label>
-                <input type="text" id="time-start" class="search-input date-picker" placeholder="YYYY-MM-DD HH:mm"
-                    style="padding: 5px;">
+            <div class="divider-vertical"></div>
 
-                <label style="color: #aaa;">To:</label>
-                <input type="text" id="time-end" class="search-input date-picker" placeholder="YYYY-MM-DD HH:mm"
-                    style="padding: 5px;">
+            <!-- Right Aligned Group -->
+            <div class="btn-group-right">
 
-                <button id="filter-time-btn" class="btn-sm" style="background: #00bcd4; color: #000;">Filter
-                    Time</button>
-                <button id="clear-time-btn" class="btn-sm"
-                    style="background: #666; color: #fff; margin-left: 5px;">Clear</button>
+                <!-- Row Filtering & Manage Columns Group -->
+                <div class="control-group" style="padding: 2px 6px; gap: 4px;">
+                    <button id="filter-selection-btn" class="btn-primary">Row Filtering</button>
+                    <button id="col-manager-btn" class="btn-primary">Manage Cols <i class="fas fa-columns"></i></button>
 
-                <div style="flex-grow: 1;"></div>
+                    <!-- Hidden Actions for Manage Cols -->
+                    <div id="col-manager-actions"
+                        style="display:none; gap:4px; margin-left:4px; padding-left:4px; border-left:1px solid #555;">
+                        <button class="btn-info btn-sm" onclick="moveSelectedColumns()"
+                            title="Move Selected to Top">Top</button>
+                        <button class="btn-warning btn-sm" onclick="filterSelectedColumns()"
+                            title="Show Only Selected">Filter Cols</button>
+                        <button class="btn-danger btn-sm" onclick="resetColumnManager()"
+                            title="Clear Selection">✕</button>
+                    </div>
+                </div>
 
-                <label style="color: #fff; cursor: pointer; display: flex; align-items: center; gap: 5px;">
-                    <input type="checkbox" id="log-scale-toggle"> Logarithmic Scale
-                </label>
-            </div>
-
-            <!-- Chart Controls -->
-            <div class="chart-controls"
-                style="display: flex; justify-content: flex-end; gap: 5px; margin-bottom: 5px; padding-right: 10px;">
-                <button class="btn-sm" onclick="downloadChartPNG()">📷 PNG</button>
-                <button class="btn-sm" onclick="downloadChartExcel()">📊 Excel (Data)</button>
-                <!-- Help Icon / Context -->
-                <button class="btn-sm"
-                    style="background:#555; color:#fff; border-radius:50%; width:24px; height:24px; padding:0; line-height:24px; text-align:center; cursor:help;"
-                    title="Levels: Critical(1), Error(2), Warning(3), Info(4), Verbose(5)">?</button>
-            </div>
-
-            <!-- Timeline Chart -->
-            <div id="chart-wrapper" style="position: relative;">
-                <canvas id="timelineChart"></canvas>
-                <div id="chart-interpretation" style="padding: 10px; color: #ccc; font-style: italic;"></div>
-            </div>
-
-            <div class="table-container">
-                <div id="timeline-table"></div>
+                <button id="download-ai" class="btn-ai" title="Export filtered view without empty columns">AI
+                    Context</button>
+                <button id="toggle-empty-cols" class="btn-secondary" title="Hide/Show columns with no data">Hide
+                    Empty</button>
             </div>
         </div>
 
-        <!-- Details Modal -->
-        <div id="detail-modal" class="modal hidden">
-            <div class="modal-content">
-                <span class="close-btn">&times;</span>
-                <h3 id="modal-title">Cell Details</h3>
-                <pre id="modal-text"></pre>
+        <!-- Info Bar (Time Range & Count) -->
+        <div class="output-controls"
+            style="border-top: 1px solid var(--border-color); margin-top: -1px; border-radius: 0 0 var(--radius-md) var(--radius-md); font-size: 0.85rem; padding: 4px 10px; min-height: 30px;">
+            <span id="record-count" style="color: var(--text-muted); margin-right: 15px;">0 Records</span>
+            <span id="time-range-info" style="color: var(--accent-primary); font-weight: 500;">Time Range: N/A</span>
+
+            <div style="flex-grow: 1;"></div>
+            <label style="color: var(--text-primary); cursor: pointer; display: flex; align-items: center; gap: 5px;">
+                <input type="checkbox" id="log-scale-toggle"> Log Scale
+            </label>
+        </div>
+
+        <!-- Chart Controls -->
+        <div class="chart-controls"
+            style="display: flex; justify-content: flex-end; gap: 5px; margin-bottom: 5px; padding-right: 10px;">
+            <button class="btn-secondary btn-sm" onclick="downloadChartPNG()">📷 PNG</button>
+            <button class="btn-secondary btn-sm" onclick="downloadChartExcel()">📊 Excel (Data)</button>
+            <button class="btn-secondary btn-sm" style="border-radius:50%; width:24px; height:24px; padding:0;"
+                title="Levels: Critical(1)-Verbose(5)">?</button>
+        </div>
+
+        <!-- Timeline Chart -->
+        <div id="chart-wrapper">
+            <canvas id="timelineChart"></canvas>
+            <div id="chart-interpretation" style="padding: 10px; color: var(--text-secondary); font-style: italic;">
             </div>
         </div>
 
-        <!-- Scripts -->
-        <script type="text/javascript" src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
-        <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
-        <script src="/static/script.js?v=65"></script>
+        <div class="table-container">
+            <div id="timeline-table"></div>
+        </div>
+    </div>
+
+    <!-- Details Modal -->
+    <div id="detail-modal" class="modal hidden">
+        <div class="modal-content">
+            <span class="close-btn">&times;</span>
+            <h3 id="modal-title">Cell Details</h3>
+            <pre id="modal-text"></pre>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script type="text/javascript" src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script src="/static/script.js?v=115"></script>
 
 </body>
 
