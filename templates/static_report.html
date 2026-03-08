@@ -1,0 +1,1110 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chronos-DFIR Report: {{ filename }}</title>
+    <!-- Tabulator CSS -->
+    <link href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator_midnight.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script type="text/javascript" src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
+    <style>
+        :root {
+            --bg-dark: #0f172a;
+            --bg-panel: #1e293b;
+            --bg-lighter: #334155;
+            --accent-primary: #3b82f6;
+            --accent-secondary: #0ea5e9;
+            --accent-alert: #ef4444;
+            --accent-warn: #f59e0b;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --border-color: #334155;
+            --font-family: 'Inter', system-ui, -apple-system, sans-serif;
+        }
+
+        body {
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            font-family: var(--font-family);
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        .dashboard-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 15px;
+            margin-bottom: 25px;
+        }
+
+        .dashboard-header h1 {
+            margin: 0;
+            font-size: 1.8rem;
+            background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary));
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .header-meta {
+            text-align: right;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .header-meta span {
+            display: block;
+            margin-top: 4px;
+        }
+
+        /* Summary Cards */
+        .kpi-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 20px;
+            margin-bottom: 25px;
+        }
+
+        .kpi-card {
+            background: var(--bg-panel);
+            border-radius: 10px;
+            padding: 20px;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .kpi-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background: var(--accent-primary);
+        }
+
+        .kpi-card h3 {
+            margin: 0 0 10px 0;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+        }
+
+        .kpi-card .val {
+            font-size: 1.6rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin: 0;
+            word-break: break-all;
+            overflow-wrap: anywhere;
+            white-space: normal;
+            line-height: 1.2;
+        }
+
+        .kpi-card .sub {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            margin-top: 5px;
+            white-space: normal;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+
+        /* Risk Level Coloring */
+        .risk-Critical::before {
+            background: var(--accent-alert);
+        }
+
+        .risk-Critical .val {
+            color: var(--accent-alert);
+        }
+
+        .risk-High::before {
+            background: #f97316;
+        }
+
+        .risk-High .val {
+            color: #f97316;
+        }
+
+        .risk-Medium::before {
+            background: var(--accent-warn);
+        }
+
+        .risk-Medium .val {
+            color: var(--accent-warn);
+        }
+
+        .risk-Low::before {
+            background: #4ade80;
+        }
+
+        .risk-Low .val {
+            color: #4ade80;
+        }
+
+        /* Chart Section */
+        .chart-row {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+            margin-bottom: 25px;
+        }
+
+        @media (max-width: 1000px) {
+            .chart-row {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .panel {
+            background: var(--bg-panel);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .panel-title {
+            margin-top: 0;
+            margin-bottom: 15px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 10px;
+        }
+
+        .chart-wrapper {
+            position: relative;
+            height: 300px;
+            width: 100%;
+        }
+
+        .doughnut-wrapper {
+            position: relative;
+            height: 250px;
+            width: 100%;
+        }
+
+        .lists-container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* Top Lists */
+        ul.top-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        ul.top-list li {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            font-size: 0.9rem;
+        }
+
+        ul.top-list li:last-child {
+            border-bottom: none;
+        }
+
+        ul.top-list li .name {
+            color: var(--text-primary);
+            font-weight: 500;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 70%;
+        }
+
+        ul.top-list li .count {
+            color: var(--accent-primary);
+            font-weight: 700;
+            background: rgba(59, 130, 246, 0.1);
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+        }
+
+        /* Table */
+        .table-panel {
+            background: var(--bg-panel);
+            border-radius: 10px;
+            border: 1px solid var(--border-color);
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Tabulator Customizing */
+        .tabulator {
+            border: none;
+            background-color: transparent;
+        }
+
+        .tabulator-header {
+            background-color: #0f172a !important;
+            border-bottom: 1px solid #334155 !important;
+        }
+
+        .tabulator-row {
+            background-color: #1e293b !important;
+            border-bottom: 1px solid #334155 !important;
+        }
+
+        .tabulator-row.tabulator-row-even {
+            background-color: #1a2333 !important;
+        }
+
+        /* Context Analytics & Chainsaw Styles */
+        .context-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 5px;
+            font-size: 0.8rem;
+            background: rgba(0, 0, 0, 0.15);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 15px;
+        }
+
+        .context-table th {
+            text-align: left;
+            padding: 8px 10px;
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-secondary);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.7rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .context-table td {
+            padding: 8px 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+            color: var(--text-primary);
+        }
+
+        .context-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .context-table tbody tr:hover {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .tactic-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: bold;
+            text-transform: uppercase;
+            background-color: rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+            border: 1px solid rgba(59, 130, 246, 0.4);
+            margin-right: 4px;
+        }
+
+        .warning-banner {
+            background-color: rgba(255, 152, 0, 0.15);
+            color: #ffb74d;
+            padding: 10px 15px;
+            border-left: 4px solid #ff9800;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.9rem;
+        }
+
+        .analytics-block {
+            margin-bottom: 25px;
+            display: none;
+            /* Shown by JS if data exists */
+        }
+
+        /* === Threat Cards (WAF Threat Dossier) === */
+        .dossier-section {
+            margin-bottom: 25px;
+        }
+
+        .dossier-section h2 {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: #f87171;
+            margin: 0 0 16px 0;
+            padding-bottom: 10px;
+            border-bottom: 1px solid rgba(239, 68, 68, 0.3);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .actor-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(370px, 1fr));
+            gap: 16px;
+        }
+
+        .threat-card {
+            background: var(--bg-panel);
+            border: 1px solid var(--border-color);
+            border-left: 4px solid #ef4444;
+            border-radius: 10px;
+            padding: 16px 18px;
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.08);
+            position: relative;
+        }
+
+        .threat-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 12px;
+        }
+
+        .threat-card-ip {
+            font-size: 1rem;
+            font-weight: 700;
+            font-family: 'Courier New', monospace;
+            color: #f87171;
+        }
+
+        .threat-card-total {
+            background: rgba(239, 68, 68, 0.15);
+            color: #f87171;
+            font-size: 0.75rem;
+            font-weight: 700;
+            padding: 3px 10px;
+            border-radius: 12px;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            white-space: nowrap;
+        }
+
+        .threat-card-meta {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-bottom: 10px;
+        }
+
+        .tc-section-label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: var(--text-secondary);
+            margin: 10px 0 5px 0;
+            font-weight: 600;
+        }
+
+        .mitre-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            background: rgba(139, 92, 246, 0.2);
+            color: #a78bfa;
+            border: 1px solid rgba(139, 92, 246, 0.4);
+            font-family: 'Courier New', monospace;
+            margin-bottom: 8px;
+        }
+
+        .rule-chip {
+            display: inline-block;
+            padding: 2px 7px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            background: rgba(245, 158, 11, 0.15);
+            color: #fbbf24;
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            margin: 2px 3px 2px 0;
+        }
+
+        .uri-chip {
+            display: inline-block;
+            padding: 2px 7px;
+            border-radius: 4px;
+            font-size: 0.68rem;
+            background: rgba(59, 130, 246, 0.1);
+            color: #60a5fa;
+            border: 1px solid rgba(59, 130, 246, 0.25);
+            margin: 2px 3px 2px 0;
+            font-family: 'Courier New', monospace;
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .snippet-box {
+            background: #0f172a;
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            border-radius: 6px;
+            padding: 8px 10px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.68rem;
+            color: #fca5a5;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 90px;
+            overflow-y: auto;
+            margin-top: 4px;
+        }
+
+        /* ── Print / PDF styles ──────────────────────────────────────────── */
+        @media print {
+            body { background: #fff !important; color: #000 !important; padding: 10px; }
+            .dashboard-header h1 { -webkit-text-fill-color: #1e3a8a !important; }
+            .kpi-grid, .chart-row { break-inside: avoid; }
+            .kpi-card { background: #f1f5f9 !important; border: 1px solid #cbd5e1 !important; color: #000 !important; }
+            .kpi-card .val { color: #1e3a8a !important; }
+            .kpi-card .sub { color: #475569 !important; }
+            .panel { background: #f8fafc !important; border: 1px solid #cbd5e1 !important; break-inside: avoid; }
+            .panel-title { color: #1e3a8a !important; border-color: #cbd5e1 !important; }
+            .context-table { color: #000 !important; break-inside: avoid; }
+            .context-table th { background: #e2e8f0 !important; color: #334155 !important; }
+            .context-table td { color: #1e293b !important; border-color: #e2e8f0 !important; }
+            .context-table tr { break-inside: avoid; }
+            ul.top-list li { color: #000 !important; border-color: #e2e8f0 !important; }
+            ul.top-list li .name { color: #1e293b !important; }
+            ul.top-list li .count { background: #dbeafe !important; color: #1d4ed8 !important; }
+            .tactic-badge { background: #dbeafe !important; color: #1d4ed8 !important; }
+            .warning-banner { background: #fff7ed !important; color: #92400e !important; border-color: #f97316 !important; }
+            a { color: #1d4ed8 !important; }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="dashboard-header">
+        <div>
+            <h1>Chronos-DFIR</h1>
+            <div style="color: var(--text-secondary); font-size: 0.9rem; margin-top: 5px;">Investigative Report</div>
+        </div>
+        <div class="header-meta">
+            <span><strong>Target:</strong> {{ filename }}</span>
+            <span><strong>Generated:</strong> {{ timestamp }}</span>
+        </div>
+    </div>
+
+    <div class="kpi-grid">
+        <div class="kpi-card">
+            <h3>Total Events</h3>
+            <div class="val">{{ total_events }}</div>
+            <div class="sub">{{ time_range }}</div>
+        </div>
+        <div class="kpi-card risk-{{ risk_level }}">
+            <h3 style="color:var(--text-primary)">Threat Risk Level <span
+                    style="font-size: 0.7rem; color: #94a3b8; font-weight: normal;">(Score: {{ risk_score }})</span>
+            </h3>
+            <div class="val">{{ risk_level }}</div>
+            <div class="sub" style="margin-bottom: 8px;">Based on IOCs &amp; Threat Context</div>
+            <div
+                style="font-size: 0.75rem; color: #cbd5e1; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 4px; max-height: 100px; overflow-y: auto;">
+                <strong style="color:#94a3b8;">Justification:</strong><br>
+                {% if risk_justify and risk_justify|length > 0 %}
+                {% for log in risk_justify %}
+                <div style="margin-bottom: 2px;">• {{ log }}</div>
+                {% endfor %}
+                {% else %}
+                <div style="color:#4ade80; margin-top:2px;">No anomalies detected in this dataset.</div>
+                {% endif %}
+            </div>
+        </div>
+        <div class="kpi-card">
+            <h3>Top Tactic / Category</h3>
+            <div class="val" style="font-size: 1.2rem; line-height: 1.8rem; word-break:break-word;">{% if top_tactic and top_tactic | lower not in ['null', 'none', 'nan', 'n/a', '-', ''] %}{{ top_tactic }}{% else %}N/A{% endif %}</div>
+            <div class="sub">Most frequent violation type</div>
+        </div>
+        <div class="kpi-card">
+            <h3>Primary Identity</h3>
+            <div class="val" style="font-size: 1.5rem; line-height: 2.2rem;">{{ top_identity }}</div>
+            <div class="sub">Most active user/account</div>
+        </div>
+        <div class="kpi-card">
+            <h3>Velocity (EPS)</h3>
+            <div class="val">{{ eps }}</div>
+            <div class="sub">Events Per Second</div>
+        </div>
+    </div>
+
+    <div class="chart-row">
+        <div class="panel">
+            <h3 class="panel-title">Activity Timeline</h3>
+            <div class="chart-wrapper">
+                <canvas id="timelineChart"></canvas>
+            </div>
+        </div>
+        <div class="lists-container">
+            <div class="panel">
+                <h3 class="panel-title">Top Event IDs</h3>
+                <ul class="top-list" id="topEventsList">
+                    <!-- Populated by JS -->
+                </ul>
+            </div>
+            <div class="panel">
+                <h3 class="panel-title">Top Providers / Sources</h3>
+                <ul class="top-list" id="topProvidersList">
+                    <!-- Populated by JS -->
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <!-- Analytics Blocks injected by JS -->
+    <div id="analytics-container" class="analytics-block">
+        <div class="panel" style="margin-bottom: 25px;">
+            <h3 class="panel-title">Sanitized Forensic Summary</h3>
+            <div id="context-analytics-content"></div>
+        </div>
+    </div>
+
+    <div id="hunting-container" class="analytics-block">
+        <div class="panel" style="margin-bottom: 25px; border-color: rgba(255, 152, 0, 0.4);">
+            <h3 class="panel-title" style="color: #ffb74d;">Chronos Hunter Summary</h3>
+            <div id="hunting-analytics-content"></div>
+        </div>
+    </div>
+
+    <!-- Sigma Rule Detections (rendered by JS if sigma hits exist) -->
+    <div id="sigma-container" style="display:none; margin-bottom: 25px;">
+        <div class="panel" style="border-color: rgba(249,115,22,0.4);">
+            <h3 class="panel-title" style="color:#f97316;">Sigma Rule Detections</h3>
+            <div id="sigma-detections-content"></div>
+        </div>
+    </div>
+
+    <!-- WAF Threat Actor Dossier (rendered by JS if threat_actors exist) -->
+    <div id="threat-dossier-container" style="display:none; margin-bottom: 25px;">
+        <div class="panel">
+            <div class="dossier-section">
+                <h2>&#127989; WAF Threat Actor Dossier</h2>
+                <div id="actor-grid" class="actor-grid"></div>
+            </div>
+        </div>
+    </div>
+
+
+    <script>
+        const CHART_DATA = {{ chart_data_json | safe }};
+        const TOP_EVENTS = {{ top_events_json | safe }};
+        const TOP_PROVIDERS = {{ top_providers_json | safe }};
+        const CONTEXT_DATA = {{ context_data_json | default ('null') | safe }};
+        const HUNTING_DATA = {{ hunting_data_json | default ('null') | safe }};
+        const THREAT_ACTORS = {{ threat_actors_json | default ('null') | safe }};
+        const SIGMA_HITS = {{ sigma_hits_json | default ('[]') | safe }};
+
+        // Populate Top Lists
+        function populateList(elementId, data) {
+            const list = document.getElementById(elementId);
+            if (!data || data.length === 0) {
+                // Hide the whole panel if there's nothing to show
+                const panel = list.closest('.panel');
+                if (panel) panel.style.display = 'none';
+                return;
+            }
+            data.forEach(item => {
+                const li = document.createElement('li');
+                li.innerHTML = `<span class="name" title="${item.name}">${item.name}</span> <span class="count">${item.count}</span>`;
+                list.appendChild(li);
+            });
+        }
+        populateList('topEventsList', TOP_EVENTS);
+        populateList('topProvidersList', TOP_PROVIDERS);
+
+        // Render Context Analytics
+        if (CONTEXT_DATA) {
+            let html = '';
+
+            // Top IPs, Users, Hosts, Paths, Methods, Violations
+            const hasGridItems = (CONTEXT_DATA.ips && CONTEXT_DATA.ips.length > 0) ||
+                (CONTEXT_DATA.users && CONTEXT_DATA.users.length > 0) ||
+                (CONTEXT_DATA.hosts && CONTEXT_DATA.hosts.length > 0) ||
+                (CONTEXT_DATA.paths && CONTEXT_DATA.paths.length > 0) ||
+                (CONTEXT_DATA.methods && CONTEXT_DATA.methods.length > 0) ||
+                (CONTEXT_DATA.violations && CONTEXT_DATA.violations.length > 0);
+
+            if (hasGridItems) {
+                html += '<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap:20px; margin-bottom:25px;">';
+
+                if (CONTEXT_DATA.ips && CONTEXT_DATA.ips.length > 0) {
+                    html += `<div><h4 style="color:#94a3b8; font-size:0.8rem; text-transform:uppercase; margin-bottom:10px;">Top IPs</h4>`;
+                    CONTEXT_DATA.ips.forEach(ip => {
+                        html += `<div style="padding:4px 8px; background:rgba(59,130,246,0.1); border-radius:3px; margin-bottom:4px; font-size:0.85rem; border:1px solid rgba(59,130,246,0.2);"><span style="color:#60a5fa; font-weight:600;">${ip.id}</span> <span style="float:right; opacity:0.6;">${ip.count}</span></div>`;
+                    });
+                    html += '</div>';
+                }
+
+                if (CONTEXT_DATA.users && CONTEXT_DATA.users.length > 0) {
+                    html += `<div><h4 style="color:#94a3b8; font-size:0.8rem; text-transform:uppercase; margin-bottom:10px;">Top Users</h4>`;
+                    CONTEXT_DATA.users.forEach(u => {
+                        html += `<div style="padding:4px 8px; background:rgba(16,185,129,0.1); border-radius:3px; margin-bottom:4px; font-size:0.85rem; border:1px solid rgba(16,185,129,0.2);"><span style="color:#34d399; font-weight:600;">${u.id}</span> <span style="float:right; opacity:0.6;">${u.count}</span></div>`;
+                    });
+                    html += '</div>';
+                }
+
+                if (CONTEXT_DATA.hosts && CONTEXT_DATA.hosts.length > 0) {
+                    html += `<div><h4 style="color:#94a3b8; font-size:0.8rem; text-transform:uppercase; margin-bottom:10px;">Top Assets (Hosts)</h4>`;
+                    CONTEXT_DATA.hosts.forEach(h => {
+                        html += `<div style="padding:4px 8px; background:rgba(139,92,246,0.1); border-radius:3px; margin-bottom:4px; font-size:0.85rem; border:1px solid rgba(139,92,246,0.2);"><span style="color:#a78bfa; font-weight:600;">${h.id}</span> <span style="float:right; opacity:0.6;">${h.count}</span></div>`;
+                    });
+                    html += '</div>';
+                }
+
+                if (CONTEXT_DATA.paths && CONTEXT_DATA.paths.length > 0) {
+                    html += `<div><h4 style="color:#94a3b8; font-size:0.8rem; text-transform:uppercase; margin-bottom:10px;">Top Directories</h4>`;
+                    CONTEXT_DATA.paths.forEach(p => {
+                        html += `<div style="padding:4px 8px; background:rgba(236,72,153,0.1); border-radius:3px; margin-bottom:4px; border:1px solid rgba(236,72,153,0.2);">
+                            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; min-width:0;">
+                                <div style="overflow-x:auto; white-space:nowrap; min-width:0; flex:1; padding-bottom:2px;" title="${p.id}">
+                                    <span style="color:#f472b6; font-weight:600; font-family:monospace; font-size:0.78rem;">${p.id}</span>
+                                </div>
+                                <span style="opacity:0.6; white-space:nowrap; flex-shrink:0; font-size:0.85rem;">${p.count}</span>
+                            </div>
+                        </div>`;
+                    });
+                    html += '</div>';
+                }
+
+                if (CONTEXT_DATA.methods && CONTEXT_DATA.methods.length > 0) {
+                    html += `<div><h4 style="color:#94a3b8; font-size:0.8rem; text-transform:uppercase; margin-bottom:10px;">HTTP Methods</h4>`;
+                    CONTEXT_DATA.methods.forEach(m => {
+                        html += `<div style="padding:4px 8px; background:rgba(245,158,11,0.1); border-radius:3px; margin-bottom:4px; font-size:0.85rem; border:1px solid rgba(245,158,11,0.2);"><span style="color:#fbbf24; font-weight:600;">${m.id}</span> <span style="float:right; opacity:0.6;">${m.count}</span></div>`;
+                    });
+                    html += '</div>';
+                }
+
+                if (CONTEXT_DATA.violations && CONTEXT_DATA.violations.length > 0) {
+                    html += `<div><h4 style="color:#94a3b8; font-size:0.8rem; text-transform:uppercase; margin-bottom:10px;">Violation Categories</h4>`;
+                    CONTEXT_DATA.violations.forEach(v => {
+                        html += `<div style="padding:4px 8px; background:rgba(239,68,68,0.1); border-radius:3px; margin-bottom:4px; font-size:0.78rem; border:1px solid rgba(239,68,68,0.2); display:flex; justify-content:space-between; align-items:center; gap:8px;"><span style="color:#f87171; font-weight:600; font-family:monospace; overflow-x:auto; white-space:nowrap; max-width:80%;" title="${v.id}">${v.id}</span><span style="opacity:0.6; white-space:nowrap; flex-shrink:0;">${v.count}</span></div>`;
+                    });
+                    html += '</div>';
+                }
+
+                html += '</div>';
+            }
+
+            // ── OWASP ↔ MITRE ATT&CK enrichment lookup ──────────────────────────────
+            const OWASP_MITRE_MAP = {
+                'A1': { owasp: 'A01:2021 – Broken Access Control', mitre_tactic: 'TA0004 – Privilege Escalation', mitre_tech: 'T1068', color: '#fb923c', desc: 'Unauthorized resource access or privilege abuse detected.' },
+                'A2': { owasp: 'A02:2021 – Cryptographic Failures', mitre_tactic: 'TA0009 – Collection', mitre_tech: 'T1119', color: '#a78bfa', desc: 'Sensitive data exposure via weak encryption or plain-text transmission.' },
+                'A3': { owasp: 'A03:2021 – Injection (SQLi / XSS / CMDi)', mitre_tactic: 'TA0001 – Initial Access', mitre_tech: 'T1190', color: '#f87171', desc: 'Exploit of public-facing application via injection payloads.' },
+                'A4': { owasp: 'A04:2021 – Insecure Design', mitre_tactic: 'TA0002 – Execution', mitre_tech: 'T1203', color: '#fb923c', desc: 'Exploitation of insecure logic or architecture design flaws.' },
+                'A5': { owasp: 'A05:2021 – Security Misconfiguration', mitre_tactic: 'TA0007 – Discovery', mitre_tech: 'T1592', color: '#facc15', desc: 'Probing for exposed services, default credentials, or misconfigured headers.' },
+                'A6': { owasp: 'A06:2021 – Vulnerable & Outdated Components', mitre_tactic: 'TA0002 – Execution', mitre_tech: 'T1203', color: '#fb923c', desc: 'Exploitation via outdated or vulnerable third-party dependencies.' },
+                'A7': { owasp: 'A07:2021 – Auth & Session Failures', mitre_tactic: 'TA0006 – Credential Access', mitre_tech: 'T1110', color: '#f87171', desc: 'Brute force, credential stuffing, or session hijacking attempt.' },
+                'A8': { owasp: 'A08:2021 – Software & Data Integrity Failures', mitre_tactic: 'TA0003 – Persistence', mitre_tech: 'T1195', color: '#fb923c', desc: 'Supply chain or integrity bypass attacks detected.' },
+                'A9': { owasp: 'A09:2021 – Security Logging & Monitoring Failures', mitre_tactic: 'TA0005 – Defense Evasion', mitre_tech: 'T1562', color: '#94a3b8', desc: 'Evasion via disabling or tampering with logging mechanisms.' },
+                'A10': { owasp: 'A10:2021 – Server-Side Request Forgery', mitre_tactic: 'TA0009 – Collection', mitre_tech: 'T1590', color: '#60a5fa', desc: 'Server-Side Request Forgery to access internal resources.' }
+            };
+
+            if (CONTEXT_DATA.tactics && CONTEXT_DATA.tactics.length > 0) {
+                html += `<div style="margin-top:20px;">
+                    <h4 style="color:#94a3b8; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.1em; margin-bottom:14px; border-bottom:1px solid rgba(148,163,184,0.2); padding-bottom:6px;">
+                        Threat Classification — OWASP Top 10 &amp; MITRE ATT&amp;CK
+                    </h4>`;
+                CONTEXT_DATA.tactics.forEach(t => {
+                    // Try to match the category key (e.g. 'A3', 'A03', 'Injection', 'Injections')
+                    const rawCat = (t.category || '').trim();
+                    // Normalize: extract 'A3' style key
+                    let mapKey = null;
+                    const matchNum = rawCat.match(/A0?(\d{1,2})/i);
+                    if (matchNum) mapKey = 'A' + matchNum[1];
+                    // Fallback: keyword matching
+                    if (!mapKey) {
+                        const lc = rawCat.toLowerCase();
+                        if (lc.includes('inject') || lc.includes('sqli') || lc.includes('xss')) mapKey = 'A3';
+                        else if (lc.includes('auth') || lc.includes('brute') || lc.includes('session')) mapKey = 'A7';
+                        else if (lc.includes('access') || lc.includes('privilege')) mapKey = 'A1';
+                        else if (lc.includes('ssrf')) mapKey = 'A10';
+                        else if (lc.includes('config') || lc.includes('misconfigur')) mapKey = 'A5';
+                        else if (lc.includes('crypt') || lc.includes('tls') || lc.includes('ssl')) mapKey = 'A2';
+                        else if (lc.includes('evasion') || lc.includes('log')) mapKey = 'A9';
+                    }
+                    const info = mapKey ? OWASP_MITRE_MAP[mapKey] : null;
+                    const color = info ? info.color : '#64748b';
+                    html += `<div style="background:rgba(15,23,42,0.6); border:1px solid ${color}44; border-left:4px solid ${color}; border-radius:6px; padding:12px 16px; margin-bottom:10px;">
+                        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:6px;">
+                            <span style="background:${color}22; color:${color}; font-weight:700; font-size:0.8rem; padding:2px 10px; border-radius:999px; border:1px solid ${color}55;">${rawCat} &nbsp;×${t.count.toLocaleString()}</span>
+                            ${info ? `<span style="color:${color}; font-size:0.85rem; font-weight:600;">${info.owasp}</span>` : `<span style="color:#94a3b8; font-size:0.85rem;">${rawCat}</span>`}
+                        </div>
+                        ${info ? `<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:6px;">
+                            <code style="background:rgba(239,68,68,0.12); color:#f87171; font-size:0.72rem; padding:1px 8px; border-radius:4px; border:1px solid rgba(239,68,68,0.25);">${info.mitre_tech}</code>
+                            <code style="background:rgba(59,130,246,0.12); color:#60a5fa; font-size:0.72rem; padding:1px 8px; border-radius:4px; border:1px solid rgba(59,130,246,0.25);">${info.mitre_tactic}</code>
+                        </div>` : ''}
+                        ${info ? `<div style="color:#94a3b8; font-size:0.78rem;">${info.desc}</div>` : `<div style="color:#64748b; font-size:0.78rem;">Category not mapped to OWASP/MITRE. Review raw WAF logs for context.</div>`}
+                    </div>`;
+                });
+                html += '</div>';
+            }
+            if (CONTEXT_DATA.event_ids && CONTEXT_DATA.event_ids.length > 0) {
+                html += '<table class="context-table"><thead><tr><th>Event ID</th><th>Description</th><th>Count</th></tr></thead><tbody>';
+                CONTEXT_DATA.event_ids.forEach(e => {
+                    const lbl = e.label && e.label !== 'Event' ? e.label : '—';
+                    html += `<tr>
+                        <td><span style="color:var(--accent-secondary); font-family:monospace; font-weight:700;">${e.id}</span></td>
+                        <td style="color:#94a3b8; font-size:0.85rem;">${lbl}</td>
+                        <td>${e.count.toLocaleString()}</td>
+                    </tr>`;
+                });
+                html += '</tbody></table>';
+            }
+
+            // ---- Processes ----
+            if (CONTEXT_DATA.processes && CONTEXT_DATA.processes.length > 0) {
+                html += '<h4 style="color:#38bdf8; margin-top:14px; margin-bottom:5px;">Top Processes</h4>';
+                html += '<table class="context-table"><thead><tr><th>Process</th><th>Count</th></tr></thead><tbody>';
+                CONTEXT_DATA.processes.forEach(p => {
+                    const name = p.id.split('\\').pop() || p.id;
+                    html += `<tr>
+                        <td style="font-family:monospace; color:#7dd3fc;" title="${p.id}">${name}</td>
+                        <td>${p.count.toLocaleString()}</td>
+                    </tr>`;
+                });
+                html += '</tbody></table>';
+            }
+
+            // ---- Commands / Execution ----
+            if (CONTEXT_DATA.commands && CONTEXT_DATA.commands.length > 0) {
+                html += '<h4 style="color:#f87171; margin-top:14px; margin-bottom:5px;">&#9888; Command Execution (LOLBins / Scripts)</h4>';
+                html += '<table class="context-table"><thead><tr><th>Command Line</th><th>Count</th></tr></thead><tbody>';
+                CONTEXT_DATA.commands.forEach(c => {
+                    const short = c.id.length > 120 ? c.id.slice(0, 120) + '…' : c.id;
+                    html += `<tr>
+                        <td style="font-family:monospace; color:#fca5a5; font-size:0.78rem;" title="${c.id}">${short}</td>
+                        <td>${c.count.toLocaleString()}</td>
+                    </tr>`;
+                });
+                html += '</tbody></table>';
+            }
+
+            if (html) {
+                document.getElementById('context-analytics-content').innerHTML = html;
+                document.getElementById('analytics-container').style.display = 'block';
+            }
+        }
+
+        // Render Hunting Analytics
+        if (HUNTING_DATA && HUNTING_DATA.type === 'hunting') {
+            let html = '';
+            if (HUNTING_DATA.patterns && HUNTING_DATA.patterns.length > 0) {
+                html += `<div class="warning-banner">
+                    ⚠️ Critical Suspicious Patterns Detected (${HUNTING_DATA.patterns.length})
+                </div>`;
+                html += '<table class="context-table"><thead><tr><th style="width: 80px; text-align:center;">Row ID</th><th style="width: 150px;">Timestamp</th><th style="width: 150px;">User</th><th>Target Object / Command</th></tr></thead><tbody>';
+                HUNTING_DATA.patterns.forEach(p => {
+                    let ts = p.timestamp !== 'N/A' ? p.timestamp : 'N/A';
+                    if (ts !== 'N/A') {
+                        try {
+                            let d = new Date(ts);
+                            if (!isNaN(d.getTime())) ts = d.toISOString().replace('T', ' ').substring(0, 19);
+                        } catch (e) { }
+                    }
+                    let rid = p.source_row_id || 'N/A';
+                    html += `<tr><td style="color: #3b82f6; text-align:center; font-weight:bold; font-family:monospace;">${rid}</td><td style="color: #94a3b8;">${ts}</td><td style="color: #cbd5e1;">${p.user || ''}</td><td style="font-family: monospace; color: #ef4444;">${p.command || ''}</td></tr>`;
+                });
+                html += '</tbody></table>';
+            }
+            if (HUNTING_DATA.network && HUNTING_DATA.network.length > 0) {
+                html += '<h4 style="color: #ffb74d; margin-top: 15px; margin-bottom: 5px;">Suspicious Network Destinations</h4>';
+                html += '<table class="context-table"><thead><tr><th>Destination IP/Domain</th><th>Connection Count</th></tr></thead><tbody>';
+                HUNTING_DATA.network.forEach(n => {
+                    html += `<tr><td style="font-family: monospace; color: #ef4444;">${n.destination}</td><td>${n.count}</td></tr>`;
+                });
+                html += '</tbody></table>';
+            }
+
+            if (HUNTING_DATA.logons && HUNTING_DATA.logons.length > 0) {
+                html += '<h4 style="color: #ffb74d; margin-top: 15px; margin-bottom: 5px;">Authentication / Logon Summary</h4>';
+                html += '<table class="context-table"><thead><tr><th>Event / Category</th><th>Count</th></tr></thead><tbody>';
+                HUNTING_DATA.logons.forEach(l => {
+                    // Find the key that isn't 'count'
+                    let key = Object.keys(l).find(k => k !== 'count');
+                    html += `<tr><td style="color: #cbd5e1;">${l[key]}</td><td>${l.count}</td></tr>`;
+                });
+                html += '</tbody></table>';
+            }
+
+            if (html) {
+                document.getElementById('hunting-analytics-content').innerHTML = html;
+                document.getElementById('hunting-container').style.display = 'block';
+            }
+        }
+
+        // Render Timeline or Fallback Mini-Charts (Graceful Degradation)
+        if (!CHART_DATA || !CHART_DATA.labels || CHART_DATA.labels.length === 0) {
+            // No timestamps detected — hide timeline, render horizontal bar mini-charts
+            const timelineWrapper = document.getElementById('timelineChart').closest('.chart-wrapper');
+            const timelinePanel = document.getElementById('timelineChart').closest('.panel');
+            if (timelinePanel) {
+                // Build data arrays from CONTEXT_DATA
+                const users = (CONTEXT_DATA && CONTEXT_DATA.users) ? CONTEXT_DATA.users.slice(0, 10) : [];
+                const paths = (CONTEXT_DATA && CONTEXT_DATA.paths) ? CONTEXT_DATA.paths.slice(0, 10) : [];
+                const processes = (CONTEXT_DATA && CONTEXT_DATA.processes) ? CONTEXT_DATA.processes.slice(0, 10) : [];
+
+                const hasFallbackData = users.length > 0 || paths.length > 0 || processes.length > 0;
+
+                if (hasFallbackData) {
+                    timelinePanel.innerHTML = `
+                        <h3 class="panel-title" style="border-color:rgba(56,189,248,0.4); color:#38bdf8;">
+                            Enrichment Metrics <span style="font-size:0.7rem; font-weight:normal; color:#64748b;">(No timestamps detected — timeless artifact)</span>
+                        </h3>
+                        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:16px; padding-top:8px;">
+                            ${users.length > 0 ? '<div><canvas id="fallback-users" height="180"></canvas></div>' : ''}
+                            ${processes.length > 0 ? '<div><canvas id="fallback-procs" height="180"></canvas></div>' : ''}
+                            ${paths.length > 0 ? '<div><canvas id="fallback-paths" height="180"></canvas></div>' : ''}
+                        </div>`;
+
+                    const mkBarH = (ctxId, label, items, keyFn, color) => {
+                        const el = document.getElementById(ctxId);
+                        if (!el) return;
+                        const labels = items.map(x => { const v = keyFn(x); return v.length > 22 ? v.slice(-22) : v; });
+                        const data = items.map(x => x.count);
+                        new Chart(el.getContext('2d'), {
+                            type: 'bar',
+                            data: {
+                                labels,
+                                datasets: [{ label, data, backgroundColor: color + 'cc', borderColor: color, borderWidth: 1 }]
+                            },
+                            options: {
+                                indexAxis: 'y',
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                plugins: { legend: { display: true, labels: { color: '#94a3b8', font: { size: 10 } } }, tooltip: { backgroundColor: 'rgba(15,23,42,0.9)', bodyColor: '#cbd5e1' } },
+                                scales: {
+                                    x: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: 'rgba(51,65,85,0.4)' } },
+                                    y: { ticks: { color: '#cbd5e1', font: { size: 10 } }, grid: { display: false } }
+                                }
+                            }
+                        });
+                    };
+
+                    if (users.length > 0) mkBarH('fallback-users', 'Top Users', users, u => u.id, '#34d399');
+                    if (processes.length > 0) mkBarH('fallback-procs', 'Top Processes', processes, p => p.id.split('\\').pop() || p.id, '#60a5fa');
+                    if (paths.length > 0) mkBarH('fallback-paths', 'Top Paths', paths, p => p.id, '#a78bfa');
+                } else {
+                    timelinePanel.style.display = 'none';
+                }
+            }
+        } else {
+            const ctx = document.getElementById('timelineChart').getContext('2d');
+
+            // Enhance chart styling
+            // Auto log-scale: if peak > 4× mean, use log to avoid flat chart
+            const _rd = (CHART_DATA.datasets[0] || {}).data || [];
+            const _mean = _rd.length ? _rd.reduce((a, b) => a + b, 0) / _rd.length : 0;
+            const _peak = _rd.length ? Math.max(..._rd) : 0;
+            const useLog = _peak > 0 && _mean > 0 && (_peak / _mean) > 4;
+
+            const chartOptions = {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    mode: 'index',
+                    intersect: false,
+                },
+                scales: {
+                    x: {
+                        ticks: { color: "#94a3b8", maxRotation: 45, minRotation: 45 },
+                        grid: { color: "rgba(51, 65, 85, 0.5)", drawBorder: false }
+                    },
+                    y: {
+                        type: useLog ? 'logarithmic' : 'linear',
+                        beginAtZero: !useLog,
+                        min: useLog ? 1 : undefined,
+                        ticks: {
+                            color: "#94a3b8",
+                            callback: useLog ? (v) => Number.isInteger(Math.log10(v)) ? v.toLocaleString() : null : undefined
+                        },
+                        grid: { color: "rgba(51, 65, 85, 0.5)", drawBorder: false }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: CHART_DATA.datasets.length > 1,
+                        labels: { color: "#f8fafc", usePointStyle: true, boxWidth: 6 }
+                    },
+                    tooltip: {
+                        backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                        titleColor: '#f8fafc',
+                        bodyColor: '#cbd5e1',
+                        borderColor: '#334155',
+                        borderWidth: 1,
+                        padding: 10
+                    }
+                }
+            };
+
+            // If dataset has no color, calculate mean, peak, and give it appropriate styling
+            if (CHART_DATA.datasets && CHART_DATA.datasets.length === 1 && (!CHART_DATA.datasets[0].backgroundColor)) {
+                const rawData = CHART_DATA.datasets[0].data || [];
+                const mean = rawData.length ? rawData.reduce((a, b) => a + b, 0) / rawData.length : 0;
+                const peakVal = rawData.length ? Math.max(...rawData) : 0;
+                const peakIdx = rawData.indexOf(peakVal);
+                const meanValue = Math.round(mean);
+
+                CHART_DATA.datasets[0].backgroundColor = rawData.map((v, i) => {
+                    if (i === peakIdx && peakVal > 0) return 'rgba(239, 68, 68, 0.8)'; // Red for peak
+                    if (v > mean * 1.5) return 'rgba(245, 158, 11, 0.7)'; // Orange
+                    return 'rgba(59, 130, 246, 0.6)'; // Blue
+                });
+
+                CHART_DATA.datasets[0].borderColor = rawData.map((v, i) => {
+                    if (i === peakIdx && peakVal > 0) return 'rgba(239, 68, 68, 1)';
+                    if (v > mean * 1.5) return 'rgba(245, 158, 11, 1)';
+                    return 'rgba(59, 130, 246, 1)';
+                });
+                CHART_DATA.datasets[0].borderWidth = 1;
+
+                // Add median line
+                if (rawData.length > 0) {
+                    CHART_DATA.datasets.push({
+                        label: `Average (Media): ${meanValue}`,
+                        data: new Array(rawData.length).fill(meanValue),
+                        type: 'line',
+                        borderColor: 'rgba(245, 158, 11, 0.9)',
+                        borderWidth: 2,
+                        borderDash: [6, 4],
+                        pointRadius: 0,
+                        fill: false,
+                        order: 0
+                    });
+                }
+            }
+
+            new Chart(ctx, {
+                type: CHART_DATA.datasets && CHART_DATA.datasets.length > 0 ? (CHART_DATA.datasets[0].type || 'bar') : 'bar',
+                data: {
+                    labels: CHART_DATA.labels || [],
+                    datasets: CHART_DATA.datasets || []
+                },
+                options: chartOptions
+            });
+        }
+
+        // ============================================================
+        // WAF Threat Actor Dossier — renderThreatActors()
+        // Renders one Threat Card per attacker IP if THREAT_ACTORS data exists.
+        // ============================================================
+        function renderThreatActors(actors) {
+            if (!actors || actors.length === 0) return;
+
+            const container = document.getElementById('threat-dossier-container');
+            const grid = document.getElementById('actor-grid');
+            if (!container || !grid) return;
+
+            container.style.display = 'block';
+            grid.innerHTML = '';
+
+            actors.forEach(function (actor, idx) {
+                const card = document.createElement('div');
+                card.className = 'threat-card';
+
+                // MITRE badge
+                const mitre = actor.mitre_id && actor.mitre_id !== '—'
+                    ? `<span class="mitre-badge">&#127821; ${actor.mitre_id}</span>`
+                    : '';
+
+                // Build rule chips
+                let ruleHtml = '';
+                if (actor.top_rules && typeof actor.top_rules === 'object') {
+                    Object.entries(actor.top_rules).slice(0, 3).forEach(([rule, cnt]) => {
+                        ruleHtml += `<span class="rule-chip" title="${cnt} hits">${escapeHtml(rule)}</span>`;
+                    });
+                }
+
+                // Build URI chips
+                let uriHtml = '';
+                if (actor.top_uris && typeof actor.top_uris === 'object') {
+                    Object.entries(actor.top_uris).slice(0, 3).forEach(([uri, cnt]) => {
+                        uriHtml += `<span class="uri-chip" title="${cnt} hits">${escapeHtml(uri)}</span>`;
+                    });
+                }
+
+                // Build payload snippets
+                let snippetHtml = '';
+                if (actor.payload_samples && actor.payload_samples.length > 0) {
+                    const snippets = actor.payload_samples.slice(0, 3).join('\n---\n');
+                    snippetHtml = `
+                        <p class="tc-section-label">&#9888; Evidence Snippets</p>
+                        <div class="snippet-box">${escapeHtml(snippets)}</div>`;
+                }
+
+                card.innerHTML = `
+                    <div class="threat-card-header">
+                        <span class="threat-card-ip">&#127989; ${escapeHtml(actor.ip || 'Unknown')}</span>
+                        <span class="threat-card-total">${(actor.total || 0).toLocaleString()} requests</span>
+                    </div>
+                    <div class="threat-card-meta">
+                        &#128336; ${escapeHtml(actor.first_seen || 'N/A')} &rarr; ${escapeHtml(actor.last_seen || 'N/A')}
+                        &nbsp;|&nbsp; Dwell: <strong>${escapeHtml(actor.dwell || 'N/A')}</strong>
+                    </div>
+                    ${mitre}
+                    ${ruleHtml ? `<p class="tc-section-label">&#9888; Triggered Rules</p>${ruleHtml}` : ''}
+                    ${uriHtml ? `<p class="tc-section-label">&#127760; Targeted URIs</p>${uriHtml}` : ''}
+                    ${snippetHtml}
+                `;
+
+                grid.appendChild(card);
+            });
+        }
+
+        function escapeHtml(str) {
+            if (str == null) return '';
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        // Trigger Threat Cards on page load
+        if (THREAT_ACTORS && Array.isArray(THREAT_ACTORS) && THREAT_ACTORS.length > 0) {
+            renderThreatActors(THREAT_ACTORS);
+        }
+
+        // Render Sigma Detections
+        if (SIGMA_HITS && SIGMA_HITS.length > 0) {
+            const levelColor = { critical: '#ff4d4d', high: '#f59e0b', medium: '#facc15', low: '#4ade80' };
+            let sh = `<table style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+                <thead><tr style="color:#94a3b8; font-size:0.75rem; text-transform:uppercase; border-bottom:1px solid rgba(255,255,255,0.1);">
+                    <th style="text-align:left; padding:6px 10px;">Level</th>
+                    <th style="text-align:left; padding:6px 10px;">Rule</th>
+                    <th style="text-align:left; padding:6px 10px;">Technique</th>
+                    <th style="text-align:right; padding:6px 10px;">Events</th>
+                </tr></thead><tbody>`;
+            SIGMA_HITS.forEach(h => {
+                const lvl = (h.level || 'low').toLowerCase();
+                const col = levelColor[lvl] || '#94a3b8';
+                sh += `<tr style="border-top:1px solid rgba(255,255,255,0.05);">
+                    <td style="padding:6px 10px;"><span style="color:${col}; font-weight:700; font-size:0.8rem; text-transform:uppercase;">${h.level}</span></td>
+                    <td style="padding:6px 10px; color:var(--text-primary);">${escapeHtml(h.title)}</td>
+                    <td style="padding:6px 10px; color:#94a3b8; font-family:monospace; font-size:0.78rem;">${escapeHtml(h.mitre_technique || '—')}</td>
+                    <td style="padding:6px 10px; text-align:right; color:#60a5fa; font-weight:600;">${h.matched_rows}</td>
+                </tr>`;
+            });
+            sh += '</tbody></table>';
+            document.getElementById('sigma-detections-content').innerHTML = sh;
+            document.getElementById('sigma-container').style.display = 'block';
+        }
+
+    </script>
+</body>
+
+</html>

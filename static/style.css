@@ -1,173 +1,293 @@
+/* 
+   Chronos Professional Standard Theme
+   Base: Slate/Gray Dark Mode (Tailwind-like Palette)
+*/
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+    /* Color Palette - Professional Dark (Slate) */
+    --bg-body: #0f172a;
+    /* Slate-900 */
+    --bg-surface: #1e293b;
+    /* Slate-800 */
+    --bg-element: #334155;
+    /* Slate-700 */
+
+    --text-primary: #f8fafc;
+    /* Slate-50 */
+    --text-secondary: #94a3b8;
+    /* Slate-400 */
+    --text-muted: #64748b;
+    /* Slate-500 */
+
+    /* Accents - Professional Blue */
+    --accent-primary: #3b82f6;
+    /* Blue-500 */
+    --accent-hover: #2563eb;
+    /* Blue-600 */
+    --accent-subtle: rgba(59, 130, 246, 0.1);
+
+    /* Functional Colors */
+    --border-color: #334155;
+    /* Slate-700 */
+    --success: #22c55e;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+
+    /* Spacing & Sizing */
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --font-sans: 'Inter', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+}
+
+* {
+    box-sizing: border-box;
+}
+
 body {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background-color: #1e1e1e;
-    color: #e0e0e0;
+    font-family: var(--font-sans);
+    background-color: var(--bg-body);
+    color: var(--text-primary);
     margin: 0;
-    padding: 20px;
+    padding: 0;
+    font-size: 14px;
+    line-height: 1.5;
+    overflow-x: hidden;
 }
 
+/* --- Layout --- */
 .container {
-    max-width: 95% !important;
-    /* Expanded from 1200px */
+    max-width: 100%;
     margin: 0 auto;
-}
-
-/* Remove focus outline for cleaner cell selection */
-.tabulator-cell:focus {
-    outline: none !important;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    /* Use min-height instead of fixed height */
 }
 
 header {
-    text-align: center;
-    margin-bottom: 40px;
-}
-
-h1 {
-    font-size: 2.5em;
-    margin-bottom: 10px;
-    color: #4CAF50;
-}
-
-.badge {
-    font-size: 0.4em;
-    background: #333;
-    padding: 5px 10px;
-    border-radius: 4px;
-    vertical-align: middle;
-}
-
-/* Upload Area */
-.upload-section {
-    border: 2px dashed #4CAF50;
-    border-radius: 10px;
-    padding: 40px;
-    text-align: center;
-    margin-bottom: 20px;
-    background: #252526;
-    transition: background 0.3s;
-}
-
-.upload-section.highlight {
-    background: #2d2d30;
-    border-color: #81C784;
-}
-
-.button {
-    display: inline-block;
-    padding: 10px 20px;
-    background: #4CAF50;
-    color: white;
-    border-radius: 5px;
-    cursor: pointer;
-    margin-top: 10px;
-}
-
-.button:hover {
-    background: #45a049;
-}
-
-input[type="file"] {
-    display: none;
-}
-
-/* Controls */
-.controls {
-    text-align: center;
-    margin-bottom: 20px;
-}
-
-#chart-wrapper {
-    width: 100%;
-    height: 300px;
-    /* Reduced from 400px to be less overwhelming */
-    margin-bottom: 20px;
-    background: #1e1e1e;
-    border: 1px solid #444;
-    border-radius: 4px;
-    padding: 10px;
-    position: relative;
-    /* For toolbar positioning */
-}
-
-/* Adjust toolbar to be more compact */
-.chart-toolbar {
-    position: absolute;
-    top: 5px;
-    right: 10px;
-    z-index: 10;
+    margin-bottom: 5px;
+    padding-bottom: 5px;
+    border-bottom: 1px solid var(--border-color);
     display: flex;
-    gap: 5px;
-}
-
-.chart-toolbar button {
-    padding: 2px 8px;
-    font-size: 0.8em;
-    height: 24px;
-    opacity: 0.8;
-    cursor: pointer;
-}
-
-.chart-toolbar button:hover {
-    opacity: 1;
-}
-
-select {
-    padding: 10px;
-    background: #333;
-    color: white;
-    border: 1px solid #555;
-    border-radius: 4px;
-    margin-right: 10px;
-}
-
-.btn-primary {
-    padding: 10px 20px;
-    background: #2196F3;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-}
-
-.btn-primary:hover {
-    background: #1976D2;
-}
-
-/* Results */
-.toolbar {
-    margin-bottom: 10px;
-    display: flex;
-    gap: 10px;
+    justify-content: space-between;
     align-items: center;
 }
 
-.btn-secondary {
-    padding: 8px 16px;
-    background: #555;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
+h1 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
 }
 
-.hidden {
+.version-badge {
+    background: var(--bg-element);
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    font-weight: 400;
+}
+
+/* --- Components --- */
+
+/* Standard Buttons */
+button,
+.button,
+.btn-primary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 16px;
+    background-color: var(--accent-primary);
+    color: #fff;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    font-family: var(--font-sans);
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.2s, border-color 0.2s;
+    line-height: 1;
+}
+
+button:hover,
+.button:hover,
+.btn-primary:hover {
+    background-color: var(--accent-hover);
+    text-decoration: none;
+}
+
+button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.btn-secondary {
+    background-color: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+}
+
+.btn-secondary:hover {
+    background-color: var(--bg-element);
+    border-color: var(--text-secondary);
+}
+
+.btn-danger {
+    background-color: transparent;
+    border: 1px solid var(--danger);
+    color: var(--danger);
+}
+
+.btn-danger:hover {
+    background-color: rgba(239, 68, 68, 0.1);
+}
+
+/* Inputs */
+input[type="text"],
+input[type="search"],
+select,
+.flatpickr-input {
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 6px 10px;
+    border-radius: var(--radius-md);
+    font-family: var(--font-sans);
+    font-size: 0.875rem;
+}
+
+input:focus,
+select:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+
+/* Upload Area */
+#fileElem {
     display: none;
 }
 
-#results-area {
-    height: 85vh;
-    display: flex;
-    flex-direction: column;
+/* Hide default browser input */
+
+.upload-section {
+    border: 2px dashed var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 10px;
+    text-align: center;
+    background-color: rgba(30, 41, 59, 0.5);
+    margin-bottom: 10px;
+    transition: all 0.2s;
+    color: var(--text-secondary);
 }
 
-#timeline-table {
-    background: #252526;
-    border-radius: 4px;
-    flex-grow: 1;
+.upload-section:hover,
+.upload-section.highlight {
+    border-color: var(--accent-primary);
+    background-color: var(--accent-subtle);
+    color: var(--accent-primary);
+}
+
+/* Chart Container */
+#chart-wrapper {
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 15px;
+    margin-bottom: 20px;
+    height: 320px;
+    position: relative;
+    display: none;
+    /* Hidden by default to remove empty space */
+}
+
+/* Toolbar */
+.output-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 5px 10px;
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-bottom: none;
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+    align-items: center;
+    margin-top: 5px;
+}
+
+/* --- Data Table (Tabulator) --- */
+.tabulator {
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
+    /* Bottom rounded only */
+    font-family: var(--font-mono);
+    /* Monospace for data */
+    font-size: 13px;
+}
+
+/* Header */
+.tabulator .tabulator-header {
+    background-color: var(--bg-body) !important;
+    border-bottom: 1px solid var(--border-color) !important;
+    color: var(--text-secondary);
+    font-weight: 600;
+    font-family: var(--font-sans);
+    /* Headers are sans */
+}
+
+.tabulator .tabulator-header .tabulator-col {
+    background-color: var(--bg-body) !important;
+    border-right: 1px solid var(--border-color) !important;
+}
+
+.tabulator .tabulator-header .tabulator-col.tabulator-sortable:hover {
+    background-color: var(--bg-element) !important;
+}
+
+/* Rows */
+.tabulator-row {
+    background-color: var(--bg-surface) !important;
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--border-color) !important;
+}
+
+.tabulator-row.tabulator-row-even {
+    background-color: rgba(30, 41, 59, 0.5) !important;
+    /* Slightly distinct even rows */
+}
+
+.tabulator-row:hover {
+    background-color: rgba(59, 130, 246, 0.4) !important;
+    /* Strong Blue Highlight */
+    border-left: 3px solid var(--accent-primary) !important;
+    cursor: pointer;
+}
+
+.tabulator-row.tabulator-selected {
+    background-color: rgba(59, 130, 246, 0.2) !important;
+    border-left: 3px solid var(--accent-primary) !important;
+}
+
+.tabulator-cell {
+    border-right: 1px solid var(--border-color) !important;
+    padding: 6px 8px !important;
+    vertical-align: middle;
 }
 
 /* Modal */
-.modal {
+#detail-modal {
     display: none;
     position: fixed;
     z-index: 1000;
@@ -175,90 +295,280 @@ select {
     top: 0;
     width: 100%;
     height: 100%;
-    overflow: auto;
-    background-color: rgb(0, 0, 0);
-    background-color: rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(5px);
+    background-color: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(2px);
 }
 
-.modal.show {
-    display: block;
+#detail-modal.show {
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .modal-content {
-    background-color: #252526;
-    margin: 10% auto;
-    padding: 20px;
-    border: 1px solid #4CAF50;
-    width: 80%;
-    max-width: 800px;
-    border-radius: 8px;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    width: 60%;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+.modal-header {
+    padding: 15px;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.modal-header h2 {
+    margin: 0;
+    font-size: 1.1rem;
+    color: var(--text-primary);
 }
 
 .close-btn {
-    color: #aaa;
-    float: right;
-    font-size: 28px;
-    font-weight: bold;
+    color: var(--text-secondary);
+    font-size: 1.5rem;
     cursor: pointer;
+    line-height: 1;
 }
 
 .close-btn:hover {
-    color: white;
+    color: var(--text-primary);
+}
+
+.modal-body {
+    padding: 0;
+    overflow: hidden;
+    flex-grow: 1;
+    display: flex;
 }
 
 #modal-text {
-    white-space: pre-wrap;
-    word-wrap: break-word;
-    font-family: 'Consolas', 'Monaco', monospace;
-    background: #1e1e1e;
-    padding: 10px;
-    border-radius: 4px;
-    max-height: 60vh;
+    width: 100%;
+    height: 100%;
+    background-color: #0d1117;
+    /* GitHub code block bg */
+    color: #c9d1d9;
+    border: none;
+    padding: 15px;
+    font-family: var(--font-mono);
+    resize: none;
+    font-size: 13px;
     overflow-y: auto;
 }
 
-/* Clickable cells */
-.tabulator-cell {
-    cursor: pointer;
+/* Highlight */
+.highlight-term {
+    background-color: rgba(253, 224, 71, 0.3);
+    /* Yellow-300 transparent */
+    color: #fef08a;
+    /* Yellow-200 */
+    border-radius: 2px;
+    padding: 0 2px;
 }
 
-/* Ensure pagination footer is fully visible */
-.tabulator .tabulator-footer {
-    overflow: visible !important;
-    min-height: 40px;
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
 }
 
-.tabulator .tabulator-footer .tabulator-paginator {
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--bg-element);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--text-secondary);
+}
+
+/* UTILITIES - Added for Compatibility */
+.hidden {
+    display: none !important;
+}
+
+.divider-vertical {
+    width: 1px;
+    height: 24px;
+    background: var(--border-color);
+    margin: 0 10px;
+}
+
+/* Button Variants */
+.btn-sm {
+    padding: 4px 10px;
+    font-size: 0.75rem;
+    height: 28px;
+}
+
+.btn-info {
+    background-color: #0ea5e9;
+    /* Sky-500 */
+    color: white;
+    border: 1px solid transparent;
+}
+
+.btn-info:hover {
+    background-color: #0284c7;
+    /* Sky-600 */
+}
+
+.btn-outline-primary {
+    background-color: transparent;
+    border: 1px solid var(--accent-primary);
+    color: var(--accent-primary);
+}
+
+.btn-outline-primary:hover {
+    background-color: var(--accent-subtle);
+}
+
+/* Column Manager Styles */
+.col-header-container {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
-    flex-wrap: wrap;
-    gap: 4px;
-    padding: 8px 4px;
+    justify-content: center;
+    /* Center align */
+    gap: 8px;
+    /* More space */
+    width: 100%;
 }
 
-.tabulator .tabulator-footer .tabulator-page {
-    min-width: 28px;
-    height: 28px;
+.tabulator-col-content {
+    /* Ensure content stacks correctly with filter */
+    display: flex !important;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.tabulator-col-title {
+    /* Allow title to take space */
+    flex-grow: 1;
+    text-align: center;
+}
+
+.col-select-cb {
+    cursor: pointer;
+    accent-color: var(--accent-primary);
+    width: 16px;
+    height: 16px;
+    margin: 0 !important;
+    /* Reset margin */
+}
+
+.col-order-badge {
+    background-color: var(--accent-primary);
+    color: white;
+    font-size: 0.75rem;
+    padding: 2px 6px;
+    border-radius: 12px;
+    /* Pill shape */
+    min-width: 20px;
+    text-align: center;
+    font-weight: 600;
+    display: none;
+    /* Hidden by default */
+    margin-left: 5px;
+    z-index: 10;
+    /* Ensure on top */
+}
+
+/* Fix Sort Arrow Overlap */
+.tabulator-col-sorter {
+    position: static !important;
+    /* Force static to flow in flex */
+    margin-left: 5px;
+}
+
+.active-filter {
+    background-color: var(--warning) !important;
+    color: black !important;
+    border-color: var(--warning) !important;
+}
+
+.active-noise {
+    background-color: var(--danger) !important;
+    color: white !important;
+    border-color: var(--danger) !important;
+}
+
+.active-success {
+    background-color: var(--success) !important;
+    color: white !important;
+    border-color: var(--success) !important;
+}
+
+.active-manager {
+    background-color: var(--accent-primary) !important;
+    color: white !important;
+    border-color: var(--accent-primary) !important;
+}
+
+#global-search {
+    background-color: #ffffff !important;
+    color: #0d1117 !important;
+    border: 1px solid #ccc !important;
+}
+
+/* Button Grouping */
+.btn-group-right {
+    margin-left: auto;
+    display: flex;
+    gap: 5px;
+    align-items: center;
+}
+
+/* Control Group Box (for Time & Col Manager) */
+.control-group {
     display: inline-flex;
     align-items: center;
-    justify-content: center;
-    padding: 2px 6px;
-    box-sizing: border-box;
+    gap: 8px;
+    padding: 4px 8px;
+    background-color: rgba(30, 41, 59, 0.5);
+    /* Surface slightly lighter/darker */
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    margin-right: 5px;
 }
 
-/* Prevent the table container from clipping the footer */
-#timeline-table {
-    overflow: visible !important;
+.control-group-label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    margin-right: 5px;
+    border-right: 1px solid var(--border-color);
+    padding-right: 8px;
 }
 
-#timeline-table .tabulator-tableholder {
-    overflow-x: auto;
-    overflow-y: auto;
-    /* PERFORMANCE: Isolate layout/paint to improve scroll speed */
-    contain: strict;
-    /* Disable smooth scroll for snappier drag-auto-scroll */
-    scroll-behavior: auto !important;
+/* AI Context Button (Purple) */
+.btn-ai {
+    background-color: #8b5cf6;
+    /* Violet-500 */
+    color: white;
+    border: 1px solid transparent;
+}
+
+.btn-ai:hover {
+    background-color: #7c3aed;
+    /* Violet-600 */
+}
+
+/* Unified Blue Buttons (Primary override just in case) */
+.btn-primary {
+    background-color: #3b82f6 !important;
+    border-color: #3b82f6 !important;
+}
+
+.btn-primary:hover {
+    background-color: #2563eb !important;
 }

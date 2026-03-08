@@ -1,19 +1,26 @@
 #!/bin/bash
+# =============================================
+# Chronos-DFIR Clean Restart Script v124
+# =============================================
 
-# Find and kill any showing Uvicorn process
-echo "Stopping Chronos-DFIR Server..."
-lsof -i :8000 | awk 'NR!=1 {print $2}' | xargs kill -9 2>/dev/null
+echo "🔴 Killing all uvicorn/python processes on port 8000..."
+lsof -ti:8000 | xargs kill -9 2>/dev/null
+pkill -9 -f "uvicorn app:app" 2>/dev/null
+pkill -9 -f "python.*app.py" 2>/dev/null
+sleep 1
 
-echo "Starting Server..."
-# Ensure we are in the right directory
+echo "✅ Port 8000 cleared."
+echo "🚀 Starting Chronos-DFIR (fresh, latest code)..."
+
 cd "$(dirname "$0")"
 
-# Activate venv if it exists
-if [ -d "venv" ]; then
-    source venv/bin/activate
-fi
+# Use venv uvicorn
+source "$(dirname "$0")/venv/bin/activate"
+uvicorn app:app \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --reload \
+  --reload-dir static \
+  --reload-dir templates \
+  --reload-dir engine
 
-# Run with reload, referencing local app.py
-# Using nohup to keep it running if terminal closes, or just standard for visibility
-# We use 'exec' to replace shell with python for cleaner signal handling
-exec uvicorn app:app --reload --host 127.0.0.1 --port 8000 > server.log 2>&1

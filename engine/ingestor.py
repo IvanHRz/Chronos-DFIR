@@ -346,7 +346,7 @@ def _parse_csv_robust(file_path: str, file_cat: str) -> tuple:
     """Robust CSV reading with encoding fallback and headerless detection."""
     try:
         lf = pl.scan_csv(file_path, ignore_errors=True, infer_schema_length=0)
-        lf.fetch(1)
+        lf.head(1).collect()
     except Exception:
         try:
             lf = pl.scan_csv(file_path, ignore_errors=True, infer_schema_length=0, encoding='utf8-lossy')

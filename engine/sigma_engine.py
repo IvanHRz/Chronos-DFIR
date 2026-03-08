@@ -326,7 +326,15 @@ def match_sigma_rules(df: pl.DataFrame, rules: Optional[list] = None) -> list[di
             continue
 
         custom = rule.get("custom", {}) or {}
-        tags = rule.get("tags", []) or []
+        raw_tags = rule.get("tags", []) or []
+        # Normalize tags: ensure consistent "attack.tXXXX" format
+        tags = []
+        for t in raw_tags:
+            t_lower = str(t).lower().strip()
+            # Normalize "mitre.tXXXX" → "attack.tXXXX"
+            if t_lower.startswith("mitre.t"):
+                t_lower = "attack." + t_lower[6:]
+            tags.append(t_lower)
 
         hits.append({
             "title": rule.get("title", "Unknown Rule"),
@@ -339,7 +347,7 @@ def match_sigma_rules(df: pl.DataFrame, rules: Optional[list] = None) -> list[di
             )),
             "tags": tags,
             "matched_rows": match_count,
-            "rule_path": os.path.relpath(rule.get("_path", ""), _get_rules_dir()),
+            "rule_path": os.path.relpath(rule["_path"], _get_rules_dir()) if rule.get("_path") else "inline",
         })
 
     hits.sort(key=lambda h: (
