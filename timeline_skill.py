@@ -1,7 +1,6 @@
 import polars as pl
 import os
 import json
-import pandas as pd
 from datetime import datetime
 
 # Importamos nuestros motores
@@ -11,6 +10,7 @@ from evtx_engine import process_evtx_file
 def generate_unified_timeline(source_path: str, artifact_type: str, output_dir: str) -> str:
     """
     Skill principal para Antigravity. Parsea MFT o EVTX y exporta a Excel/CSV.
+    Zero pandas dependency — uses Polars write_excel natively.
     """
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
@@ -35,15 +35,15 @@ def generate_unified_timeline(source_path: str, artifact_type: str, output_dir: 
     # 3. Exportar CSV (Velocidad nativa Polars)
     df.write_csv(csv_path)
 
-    # 4. Exportar Excel (Estilo Zimmerman con XlsxWriter)
-    with pd.ExcelWriter(xlsx_path, engine='xlsxwriter') as writer:
-        df.to_pandas().to_excel(writer, sheet_name='Timeline', index=False)
-        worksheet = writer.sheets['Timeline']
-        
-        # Formato profesional
-        worksheet.freeze_panes(1, 0) # Inmovilizar cabecera
-        worksheet.autofilter(0, 0, 0, len(df.columns) - 1) # Filtros
-        worksheet.set_column('A:K', 18) # Ajustar ancho
+    # 4. Exportar Excel (Polars nativo con xlsxwriter)
+    df.write_excel(
+        xlsx_path,
+        worksheet="Timeline",
+        autofit=True,
+        freeze_panes=(1, 0),
+        has_header=True,
+        autofilter=True,
+    )
 
     return json.dumps({
         "status": "success",

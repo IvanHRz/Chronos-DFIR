@@ -193,3 +193,69 @@ def test_sigma_basic_rule_fires():
     assert len(hits) == 1
     assert hits[0]["title"] == "Test RDP Logon"
     assert hits[0]["matched_rows"] == 2
+
+
+def test_sigma_temporal_correlation_fires():
+    """Sigma rule with timeframe+correlation should count events in time windows."""
+    from engine.sigma_engine import match_sigma_rules
+
+    # 15 login failures from same IP in 2 minutes — should trigger threshold of 10
+    df = pl.DataFrame({
+        "EventID": ["4625"] * 15 + ["4624"],
+        "IpAddress": ["10.0.0.1"] * 15 + ["10.0.0.2"],
+        "Time": [f"2025-01-01 10:00:{i:02d}" for i in range(15)] + ["2025-01-01 12:00:00"],
+    })
+
+    rule_with_timeframe = [{
+        "title": "Brute Force Test",
+        "level": "high",
+        "detection": {
+            "logon_failure": {"EventID": "4625"},
+            "condition": "logon_failure",
+            "timeframe": "5m",
+            "correlation": {
+                "type": "event_count",
+                "group-by": ["IpAddress"],
+                "timespan": "5m",
+                "condition": {"gte": 10},
+            },
+        },
+        "tags": ["attack.t1110"],
+    }]
+
+    hits = match_sigma_rules(df, rules=rule_with_timeframe)
+    assert len(hits) == 1
+    assert hits[0]["title"] == "Brute Force Test"
+    assert hits[0]["matched_rows"] >= 10  # 15 events from same IP in window
+
+
+def test_sigma_temporal_below_threshold():
+    """Sigma temporal correlation should NOT fire when below threshold."""
+    from engine.sigma_engine import match_sigma_rules
+
+    # Only 3 failures — below threshold of 10
+    df = pl.DataFrame({
+        "EventID": ["4625", "4625", "4625"],
+        "IpAddress": ["10.0.0.1", "10.0.0.1", "10.0.0.1"],
+        "Time": ["2025-01-01 10:00:00", "2025-01-01 10:00:01", "2025-01-01 10:00:02"],
+    })
+
+    rule_with_timeframe = [{
+        "title": "Brute Force Test",
+        "level": "high",
+        "detection": {
+            "logon_failure": {"EventID": "4625"},
+            "condition": "logon_failure",
+            "timeframe": "5m",
+            "correlation": {
+                "type": "event_count",
+                "group-by": ["IpAddress"],
+                "timespan": "5m",
+                "condition": {"gte": 10},
+            },
+        },
+        "tags": ["attack.t1110"],
+    }]
+
+    hits = match_sigma_rules(df, rules=rule_with_timeframe)
+    assert len(hits) == 0  # Below threshold — no hit

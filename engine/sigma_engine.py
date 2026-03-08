@@ -4,13 +4,14 @@ Chronos-DFIR Sigma Engine — Dynamic YAML-to-Polars Rule Evaluator
 Translates Sigma YAML detection rules into Polars LazyFrame expressions
 and evaluates them against forensic DataFrames at analysis time.
 
-SCOPE (v1.1):
+SCOPE (v1.2):
   IN:  field|contains, |endswith, |startswith, |any, |all, |not
        EventID list matching (is_in)
        Boolean conditions: and / or between named detection blocks
        Metadata extraction: title, level, tags, custom fields
-  OUT: Temporal aggregation (timeframe + count > N) — deferred to v1.2
-       near queries, base64offset, cidr modifiers
+       Temporal correlation: timeframe + correlation (event_count, group-by, gte)
+       Custom aggregation: aggregation block (group_by, time_window, threshold)
+  OUT: near queries, base64offset, cidr modifiers
 
 Author: Chronos-DFIR / Ivan Huerta
 """
@@ -212,10 +213,6 @@ def _parse_condition_string(condition_str: str, named_exprs: dict[str, Optional[
     """
     cond = condition_str.strip()
 
-    # Unsupported temporal/count conditions — skip gracefully
-    if re.search(r"\|count\b|timeframe", cond, re.IGNORECASE):
-        return None
-
     # "all of them" — OR of all named conditions
     if re.fullmatch(r"all\s+of\s+them", cond, re.IGNORECASE):
         exprs = [e for e in named_exprs.values() if e is not None]
@@ -265,6 +262,142 @@ def _parse_condition_string(condition_str: str, named_exprs: dict[str, Optional[
 
 
 # ---------------------------------------------------------------------------
+# Temporal correlation helpers
+# ---------------------------------------------------------------------------
+
+def _parse_timeframe(tf_str: str) -> Optional[str]:
+    """Parse Sigma timeframe string (e.g. '5m', '1h', '60s') into Polars duration string."""
+    if not tf_str or not isinstance(tf_str, str):
+        return None
+    tf = tf_str.strip().lower()
+    m = re.fullmatch(r"(\d+)\s*(s|m|h|d)", tf)
+    if not m:
+        return None
+    val, unit = m.group(1), m.group(2)
+    return f"{val}{unit}"
+
+
+def _find_time_column(columns: list[str]) -> Optional[str]:
+    """Find the best time column in the DataFrame for temporal correlation."""
+    time_candidates = ["Time", "Timestamp", "EventTime", "TimeCreated",
+                       "UtcTime", "CreationUtcTime", "_time", "date", "Date"]
+    for cand in time_candidates:
+        for col in columns:
+            if col.lower() == cand.lower():
+                return col
+    return None
+
+
+def _evaluate_temporal_correlation(
+    df_matched: pl.DataFrame,
+    detection: dict,
+    rule: dict,
+) -> Optional[int]:
+    """
+    Apply temporal correlation (timeframe + correlation block or aggregation block)
+    to already-matched rows. Returns adjusted match count, or None if no temporal
+    correlation is needed.
+
+    Supports two patterns:
+    1. Sigma standard: detection.timeframe + detection.correlation
+       correlation: {type: event_count, group-by: [field], timespan: "5m", condition: {gte: 10}}
+    2. Custom Chronos: rule.aggregation
+       aggregation: {group_by: [field], time_window: "5m", threshold: 10}
+    """
+    timeframe = detection.get("timeframe")
+    correlation = detection.get("correlation")
+    aggregation = rule.get("aggregation")
+
+    if not timeframe and not correlation and not aggregation:
+        return None  # No temporal correlation needed
+
+    if df_matched.is_empty():
+        return 0
+
+    time_col = _find_time_column(df_matched.columns)
+    if not time_col:
+        logger.debug(f"Temporal correlation skipped: no time column found in {df_matched.columns[:5]}")
+        return None  # Can't do temporal without a time column
+
+    # Parse time column to datetime
+    try:
+        ts_col = pl.col(time_col).cast(pl.Utf8)
+        df_ts = df_matched.with_columns(
+            pl.coalesce([
+                ts_col.str.to_datetime("%Y-%m-%dT%H:%M:%S%.f", strict=False),
+                ts_col.str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False),
+                ts_col.str.to_datetime("%Y-%m-%d %H:%M:%S%.f", strict=False),
+                ts_col.str.to_datetime("%Y-%m-%d %H:%M:%S", strict=False),
+                ts_col.str.to_datetime("%m/%d/%Y %H:%M:%S", strict=False),
+            ]).alias("_sigma_ts")
+        ).filter(pl.col("_sigma_ts").is_not_null()).sort("_sigma_ts")
+    except Exception as e:
+        logger.debug(f"Temporal correlation: time parse failed: {e}")
+        return None
+
+    if df_ts.is_empty():
+        return 0
+
+    # Determine parameters from either correlation or aggregation block
+    if correlation and isinstance(correlation, dict):
+        group_by_fields = correlation.get("group-by", [])
+        timespan_str = correlation.get("timespan") or str(timeframe or "5m")
+        threshold_cond = correlation.get("condition", {})
+        threshold = threshold_cond.get("gte", 5) if isinstance(threshold_cond, dict) else 5
+    elif aggregation and isinstance(aggregation, dict):
+        group_by_fields = aggregation.get("group_by", [])
+        timespan_str = aggregation.get("time_window", str(timeframe or "5m"))
+        threshold = aggregation.get("threshold", 5)
+    else:
+        # Has timeframe but no correlation/aggregation details — just use timeframe as info
+        return None
+
+    if isinstance(group_by_fields, str):
+        group_by_fields = [group_by_fields]
+
+    duration = _parse_timeframe(timespan_str)
+    if not duration:
+        duration = "5m"
+
+    # Resolve group-by columns (case-insensitive)
+    resolved_groups = []
+    for gf in group_by_fields:
+        for col in df_ts.columns:
+            if col.lower() == gf.lower():
+                resolved_groups.append(col)
+                break
+
+    try:
+        if resolved_groups:
+            # Group by time window + group fields, count events per group per window
+            windowed = (
+                df_ts.sort("_sigma_ts")
+                .group_by_dynamic("_sigma_ts", every=duration, group_by=resolved_groups)
+                .agg(pl.len().alias("_event_count"))
+            )
+            # Count groups that exceed threshold
+            hot_groups = windowed.filter(pl.col("_event_count") >= threshold)
+            if hot_groups.is_empty():
+                return 0
+            # Return total events in hot windows
+            return hot_groups["_event_count"].sum()
+        else:
+            # No group-by — just count events per time window
+            windowed = (
+                df_ts.sort("_sigma_ts")
+                .group_by_dynamic("_sigma_ts", every=duration)
+                .agg(pl.len().alias("_event_count"))
+            )
+            hot_windows = windowed.filter(pl.col("_event_count") >= threshold)
+            if hot_windows.is_empty():
+                return 0
+            return hot_windows["_event_count"].sum()
+    except Exception as e:
+        logger.debug(f"Temporal correlation eval failed: {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Main evaluation entry point
 # ---------------------------------------------------------------------------
 
@@ -295,10 +428,11 @@ def match_sigma_rules(df: pl.DataFrame, rules: Optional[list] = None) -> list[di
         if not condition_str:
             continue
 
-        # Build named expression blocks (everything except 'condition' key)
+        # Build named expression blocks (skip meta keys)
         named_exprs: dict[str, Optional[pl.Expr]] = {}
+        _meta_keys = {"condition", "timeframe", "correlation"}
         for block_name, block_value in detection.items():
-            if block_name == "condition":
+            if block_name in _meta_keys:
                 continue
             if isinstance(block_value, dict):
                 named_exprs[block_name] = _build_named_condition(block_value, columns)
@@ -317,13 +451,21 @@ def match_sigma_rules(df: pl.DataFrame, rules: Optional[list] = None) -> list[di
 
         # Evaluate — count matching rows
         try:
-            match_count = df.filter(final_expr).height
+            df_matched = df.filter(final_expr)
+            match_count = df_matched.height
         except Exception as exc:
             logger.debug(f"Sigma rule '{rule.get('title', '?')}' eval error: {exc}")
             continue
 
         if match_count == 0:
             continue
+
+        # Apply temporal correlation if rule has timeframe/correlation/aggregation
+        temporal_count = _evaluate_temporal_correlation(df_matched, detection, rule)
+        if temporal_count is not None:
+            match_count = temporal_count
+            if match_count == 0:
+                continue
 
         custom = rule.get("custom", {}) or {}
         raw_tags = rule.get("tags", []) or []
