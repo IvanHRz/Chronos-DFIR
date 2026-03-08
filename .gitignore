@@ -7,4 +7,22 @@ output/*
 uploads/*
 !uploads/.gitkeep
 server.log
+*.log
 Archivos_prueba/
+chronos_uploads/
+chronos_output/
+Skills_pdf/
+
+# Debug/scratch scripts (root level only)
+/debug_*.py
+/check_*.py
+/stress_test.py
+/patch_analyzer.py
+/ps.py
+/read_log.py
+/monitor_logs.py
+/test_*.py
+/test_*.csv
+/test_*.xlsx
+/server2.log
+/start_monitoring.sh
