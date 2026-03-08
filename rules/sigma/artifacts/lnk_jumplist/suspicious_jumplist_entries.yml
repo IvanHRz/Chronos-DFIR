@@ -1,0 +1,80 @@
+title: Jump List Suspicious Entries – Anomalous Recent File Access
+id: a7b8c9d0-7007-4a1b-b2c3-d4e5f6a7b8c9
+status: stable
+description: |
+  Detects suspicious entries in Windows Jump Lists (automatic and custom destinations)
+  that reveal recently accessed files, applications, and network paths. Jump Lists
+  persist per-application and survive file deletion. Suspicious indicators include
+  access to credential files, scripts, archives from temp dirs, or network share
+  enumeration via Explorer. Parsed by JLECmd or AppJumpListInformation.
+references:
+  - https://attack.mitre.org/techniques/T1083/
+  - https://www.sans.org/blog/jump-list-forensics/
+  - https://github.com/EricZimmerman/JLECmd
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.discovery
+  - attack.t1083
+  - attack.collection
+  - artifact.jumplist
+logsource:
+  category: jumplist
+  product: windows
+detection:
+  credential_file_access:
+    TargetPath|endswith|any:
+      - '.kdbx'
+      - '.key'
+      - '.pem'
+      - '.pfx'
+      - '.p12'
+      - '.ppk'
+      - '.rdp'
+      - '.vnc'
+      - 'ntds.dit'
+      - 'SAM'
+      - 'SYSTEM'
+      - 'SECURITY'
+  sensitive_dir_browse:
+    TargetPath|contains|any:
+      - '\Windows\System32\config\'
+      - '\Windows\NTDS\'
+      - '\Windows\repair\'
+      - '\inetpub\'
+      - '\xampp\'
+      - '\.ssh\'
+      - '\.gnupg\'
+      - '\.aws\'
+  archive_from_temp:
+    TargetPath|contains|any:
+      - '\Temp\'
+      - '\Downloads\'
+    TargetPath|endswith|any:
+      - '.zip'
+      - '.rar'
+      - '.7z'
+      - '.tar.gz'
+  condition: credential_file_access or sensitive_dir_browse or archive_from_temp
+falsepositives:
+  - Database administrators accessing SAM/SYSTEM for legitimate backup
+  - Developers working with SSH keys and certificates
+  - IT staff downloading deployment archives
+level: medium
+fields:
+  - AppId
+  - TargetPath
+  - TargetCreated
+  - TargetAccessed
+  - TargetModified
+  - MachineMACAddress
+  - MachineName
+custom:
+  mitre_tactic: "TA0007 – Discovery"
+  mitre_technique: "T1083 – File and Directory Discovery"
+  chainsaw_compatible: false
+  investigation_note: |
+    Jump Lists are stored per-user in %AppData%\Microsoft\Windows\Recent\AutomaticDestinations
+    and CustomDestinations. The AppId in the filename identifies which application created
+    the entry (e.g., Explorer, Notepad, cmd). Cross-reference with LNK analysis and
+    ShellBags for a complete picture of user navigation activity.

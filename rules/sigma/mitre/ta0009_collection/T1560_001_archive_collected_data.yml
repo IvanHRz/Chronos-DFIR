@@ -1,0 +1,90 @@
+title: Archive Collected Data – Compression Before Exfiltration
+id: b8c9d0e1-f2a3-4567-bcde-678901234567
+status: stable
+description: |
+  Detects adversaries compressing or archiving collected data prior to exfiltration.
+  Attackers use 7-Zip, WinRAR, WinZip, tar, or PowerShell Compress-Archive to bundle
+  sensitive files. Suspicious indicators include archiving to unusual paths (/tmp, C:\Users\Public),
+  password-protected archives (concealment), and archiving after bulk file staging.
+  Also detects living-off-the-land compression using built-in Windows tools.
+references:
+  - https://attack.mitre.org/techniques/T1560/001/
+  - https://github.com/WithSecureLabs/chainsaw
+  - https://github.com/redcanaryco/atomic-red-team/tree/master/atomics/T1560
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/07
+tags:
+  - attack.collection
+  - attack.t1560.001
+  - chainsaw
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  sevenzip_suspicious:
+    Image|endswith|any:
+      - '\7z.exe'
+      - '\7za.exe'
+      - '\7zr.exe'
+    CommandLine|contains|any:
+      - ' a '
+      - ' -p'
+      - '-mhe'
+      - 'Public\\'
+      - '\Temp\\'
+      - '\AppData\Local\Temp\\'
+  winrar_suspicious:
+    Image|endswith|any:
+      - '\rar.exe'
+      - '\winrar.exe'
+    CommandLine|contains|any:
+      - ' a '
+      - ' -hp'
+      - '\Temp\\'
+      - '\Public\\'
+  powershell_compress:
+    Image|endswith|any:
+      - '\powershell.exe'
+      - '\pwsh.exe'
+    CommandLine|contains|any:
+      - 'Compress-Archive'
+      - 'ZipFile::CreateFromDirectory'
+      - 'IO.Compression.ZipFile'
+  tar_archive:
+    Image|endswith: '\tar.exe'
+    CommandLine|contains: ' -c'
+  makecab_archive:
+    Image|endswith: '\makecab.exe'
+  expand_archive:
+    Image|endswith: '\expand.exe'
+    CommandLine|contains|any:
+      - '-F:'
+      - '.cab'
+  suspicious_output_path:
+    CommandLine|contains|any:
+      - 'C:\Users\Public'
+      - 'C:\Windows\Temp'
+      - 'C:\ProgramData'
+      - '%TEMP%'
+      - '\AppData\Roaming'
+  condition: sevenzip_suspicious or winrar_suspicious or powershell_compress or tar_archive or makecab_archive or (expand_archive and suspicious_output_path)
+falsepositives:
+  - Backup software creating scheduled compressed archives
+  - Software installers packaging files for deployment
+  - IT admins compressing logs for transfer
+level: medium
+fields:
+  - Image
+  - CommandLine
+  - ParentImage
+  - User
+  - Computer
+custom:
+  mitre_tactic: "TA0009 – Collection"
+  mitre_technique: "T1560.001 – Archive Collected Data: Archive via Utility"
+  windows_event_ids: ["4688", "1", "11"]
+  chainsaw_compatible: true
+  investigation_note: |
+    Correlate with file creation events (Sysmon 11) to identify the archive output path.
+    Password-protected archives (-hp / -p flags) indicate deliberate concealment.
+    Check for preceding staging activity (bulk file copies to a single directory).

@@ -1,0 +1,70 @@
+title: SQL Injection Detection — OWASP A03:2021
+id: f6a7b8c9-d0e1-2345-fabc-456789012345
+status: stable
+description: |
+  Detects SQL Injection attempts in web application logs (WAF, Apache, Nginx, IIS).
+  Handles URL encoding, double encoding, and common SQLi payloads.
+  OWASP A03:2021 – Injection / MITRE T1190.
+references:
+  - https://owasp.org/Top10/A03_2021-Injection/
+  - https://attack.mitre.org/techniques/T1190/
+  - https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/03
+tags:
+  - owasp.a03_2021
+  - attack.initial_access
+  - attack.t1190
+logsource:
+  category: webserver
+  product: any
+detection:
+  sqli_union:
+    decoded_uri|contains|any:
+      - "union select"
+      - "union+select"
+      - "UNION SELECT"
+      - "union%20select"
+  sqli_auth_bypass:
+    decoded_uri|contains|any:
+      - "' or '1'='1"
+      - "' OR 1=1--"
+      - "' or 1=1#"
+      - "') or ('1'='1"
+  sqli_stacked:
+    decoded_uri|contains|any:
+      - "; drop "
+      - "; DROP "
+      - "; insert "
+      - "; update "
+      - "; delete "
+  sqli_blind_time:
+    decoded_uri|contains|any:
+      - "sleep("
+      - "SLEEP("
+      - "waitfor delay"
+      - "WAITFOR DELAY"
+      - "benchmark("
+  sqli_error_based:
+    decoded_uri|contains|any:
+      - "extractvalue("
+      - "updatexml("
+      - "and 1=convert("
+      - "cast(0x"
+  condition: sqli_union or sqli_auth_bypass or sqli_stacked or sqli_blind_time or sqli_error_based
+falsepositives:
+  - Authorized penetration tests
+  - Security scanners with WAF bypass modules
+level: high
+fields:
+  - externalIp
+  - uri
+  - decoded_uri
+  - status_code
+  - bytes_out
+  - action
+custom:
+  owasp_category: "A03:2021 – Injection"
+  attack_type: "SQL Injection"
+  mitre_tactic: "TA0001 – Initial Access"
+  mitre_technique: "T1190 – Exploit Public-Facing Application"

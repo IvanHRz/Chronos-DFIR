@@ -1,0 +1,90 @@
+title: UAC Bypass – Auto-Elevating Binary Abuse for Privilege Escalation
+id: a3b4c5d6-e1f2-4789-3679-801234567890
+status: stable
+description: |
+  Detects UAC bypass techniques using auto-elevating Windows binaries. Adversaries abuse
+  fodhelper.exe, eventvwr.exe, computerdefaults.exe, and sdclt.exe which auto-elevate
+  without UAC prompts. When these binaries spawn child processes like cmd.exe or powershell.exe,
+  it indicates registry-based UAC bypass exploitation to gain high-integrity execution.
+references:
+  - https://attack.mitre.org/techniques/T1548/002/
+  - https://github.com/hfiref0x/UACME
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.privilege_escalation
+  - attack.defense_evasion
+  - attack.t1548.002
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  fodhelper_spawn:
+    ParentImage|endswith: '\fodhelper.exe'
+    Image|endswith|any:
+      - '\cmd.exe'
+      - '\powershell.exe'
+      - '\pwsh.exe'
+      - '\wscript.exe'
+      - '\cscript.exe'
+      - '\mshta.exe'
+  eventvwr_spawn:
+    ParentImage|endswith: '\eventvwr.exe'
+    Image|endswith|any:
+      - '\cmd.exe'
+      - '\powershell.exe'
+      - '\pwsh.exe'
+      - '\mshta.exe'
+  computerdefaults_spawn:
+    ParentImage|endswith: '\computerdefaults.exe'
+    Image|endswith|any:
+      - '\cmd.exe'
+      - '\powershell.exe'
+      - '\pwsh.exe'
+  sdclt_bypass:
+    ParentImage|endswith: '\sdclt.exe'
+    Image|endswith|any:
+      - '\cmd.exe'
+      - '\powershell.exe'
+      - '\pwsh.exe'
+  sdclt_kickoff:
+    Image|endswith: '\sdclt.exe'
+    CommandLine|contains: '/KickOffElev'
+  slui_bypass:
+    ParentImage|endswith: '\slui.exe'
+    Image|endswith|any:
+      - '\cmd.exe'
+      - '\powershell.exe'
+  wsreset_bypass:
+    ParentImage|endswith: '\WSReset.exe'
+    Image|endswith|any:
+      - '\cmd.exe'
+      - '\powershell.exe'
+      - '\pwsh.exe'
+  reg_hijack_uac:
+    CommandLine|contains|any:
+      - 'HKCU\Software\Classes\ms-settings\Shell\Open\command'
+      - 'HKCU\\Software\\Classes\\ms-settings\\Shell\\Open\\command'
+      - 'HKCU\Software\Classes\mscfile\Shell\Open\command'
+      - 'HKCU\\Software\\Classes\\mscfile\\Shell\\Open\\command'
+  condition: fodhelper_spawn or eventvwr_spawn or computerdefaults_spawn or sdclt_bypass or sdclt_kickoff or slui_bypass or wsreset_bypass or reg_hijack_uac
+falsepositives:
+  - Very rare; auto-elevating binaries should not spawn shells in normal operations
+level: high
+fields:
+  - Image
+  - CommandLine
+  - ParentImage
+  - User
+  - IntegrityLevel
+  - EventID
+custom:
+  mitre_tactic: "TA0004 – Privilege Escalation"
+  mitre_technique: "T1548.002 – Bypass User Account Control"
+  windows_event_ids: ["4688", "1"]
+  investigation_note: |
+    UAC bypass is a strong indicator of active adversary privilege escalation.
+    Check registry keys under HKCU\Software\Classes\ms-settings for hijacked commands.
+    The child process (cmd/powershell) runs at High integrity without UAC prompt.
+    Correlate with Sysmon EventID 13 for registry modifications to the hijacked keys.
+    Almost zero false positives: fodhelper/eventvwr should never spawn cmd or powershell.

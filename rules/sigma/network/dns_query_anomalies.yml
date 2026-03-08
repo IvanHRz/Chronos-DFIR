@@ -1,0 +1,101 @@
+title: DNS Query Anomalies – Tunneling, DGA, and Suspicious Resolution
+id: a1b2c3d4-3131-4a5b-b6c7-d8e9f0a1b2c3
+status: stable
+description: |
+  Detects suspicious DNS query patterns that indicate DNS tunneling (data exfiltration
+  or C2 communication over DNS), domain generation algorithm (DGA) activity, queries
+  to known malicious TLDs, and DNS rebinding attacks. Applies to Sysmon Event 22,
+  Windows DNS Client logs, and parsed DNS server/proxy logs.
+references:
+  - https://attack.mitre.org/techniques/T1071/004/
+  - https://attack.mitre.org/techniques/T1568/002/
+  - https://unit42.paloaltonetworks.com/dns-tunneling-how-dns-can-be-abused/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.command_and_control
+  - attack.t1071.004
+  - attack.exfiltration
+  - attack.t1048.003
+logsource:
+  category: dns_query
+  product: windows
+detection:
+  long_subdomain:
+    QueryName|contains|any:
+      - 'aaaaaa'
+      - 'AAAAAA'
+  suspicious_tld:
+    QueryName|endswith|any:
+      - '.tk'
+      - '.ml'
+      - '.ga'
+      - '.cf'
+      - '.gq'
+      - '.top'
+      - '.xyz'
+      - '.pw'
+      - '.cc'
+      - '.ws'
+      - '.buzz'
+      - '.surf'
+      - '.monster'
+  txt_record_abuse:
+    QueryType|contains|any:
+      - 'TXT'
+      - 'NULL'
+      - 'CNAME'
+      - 'MX'
+    QueryName|endswith|any:
+      - '.duckdns.org'
+      - '.no-ip.com'
+      - '.ddns.net'
+      - '.hopto.org'
+      - '.zapto.org'
+      - '.serveftp.com'
+  dynamic_dns:
+    QueryName|endswith|any:
+      - '.duckdns.org'
+      - '.no-ip.com'
+      - '.no-ip.org'
+      - '.ddns.net'
+      - '.hopto.org'
+      - '.zapto.org'
+      - '.serveftp.com'
+      - '.sytes.net'
+      - '.redirectme.net'
+      - '.servegame.com'
+      - '.portmap.io'
+  crypto_mining_dns:
+    QueryName|contains|any:
+      - 'pool.minergate'
+      - 'xmrpool'
+      - 'minexmr'
+      - 'nanopool'
+      - 'supportxmr'
+      - 'hashvault'
+      - 'coinhive'
+  condition: suspicious_tld or txt_record_abuse or dynamic_dns or crypto_mining_dns
+falsepositives:
+  - Legitimate use of dynamic DNS services for home servers
+  - CDN and cloud services using long subdomains
+  - Legitimate TXT record queries for SPF/DKIM verification
+level: medium
+fields:
+  - QueryName
+  - QueryType
+  - QueryStatus
+  - Image
+  - ProcessId
+  - SourceIP
+  - Timestamp
+custom:
+  mitre_tactic: "TA0011 – Command and Control"
+  mitre_technique: "T1071.004 – Application Layer Protocol: DNS"
+  chainsaw_compatible: true
+  investigation_note: |
+    DNS tunneling typically uses very long subdomain labels (>50 chars) encoded
+    in hex or base64. High query volume to a single domain with TXT responses
+    indicates data exfiltration. Dynamic DNS services are commonly used for C2
+    because they allow rapid IP changes. Correlate with Sysmon Event 22 to map
+    DNS queries to specific processes.

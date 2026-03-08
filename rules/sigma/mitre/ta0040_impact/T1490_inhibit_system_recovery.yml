@@ -1,0 +1,102 @@
+title: Inhibit System Recovery – VSS / Backup / Boot Configuration Destruction
+id: f2a3b4c5-d6e7-8901-fabc-012345678901
+status: stable
+description: |
+  Detects adversary attempts to prevent system recovery by deleting Volume Shadow Copies,
+  disabling Windows Recovery Environment (WinRE), modifying boot configuration data (BCD),
+  deleting backup catalogs, and stopping backup services. This technique is commonly
+  executed immediately before ransomware deployment to maximize damage and prevent recovery
+  without paying the ransom. Also covers Disable-ComputerRestore and PowerShell-based
+  shadow copy destruction.
+references:
+  - https://attack.mitre.org/techniques/T1490/
+  - https://www.cisa.gov/stopransomware
+  - https://github.com/WithSecureLabs/chainsaw
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.impact
+  - attack.t1490
+  - ransomware
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  vssadmin_delete:
+    Image|endswith: '\vssadmin.exe'
+    CommandLine|contains|any:
+      - 'delete shadows'
+      - 'resize shadowstorage /maxsize=401mb'
+      - 'resize shadowstorage /maxsize=unbounded'
+  wmic_shadowcopy_delete:
+    Image|endswith: '\wmic.exe'
+    CommandLine|contains|any:
+      - 'shadowcopy delete'
+      - 'shadowcopy where "ID'
+  bcdedit_recovery_off:
+    Image|endswith: '\bcdedit.exe'
+    CommandLine|contains|any:
+      - 'recoveryenabled no'
+      - 'bootstatuspolicy ignoreallfailures'
+      - '/set {default} safeboot'
+      - 'deletevalue {default} safeboot'
+  wbadmin_catalog_delete:
+    Image|endswith: '\wbadmin.exe'
+    CommandLine|contains|any:
+      - 'delete catalog -quiet'
+      - 'delete systemstatebackup'
+      - 'delete backup'
+  reagentc_disable:
+    Image|endswith: '\reagentc.exe'
+    CommandLine|contains: '/disable'
+  disable_computer_restore:
+    CommandLine|contains|any:
+      - 'Disable-ComputerRestore'
+      - 'disable-computerrestore'
+  backup_service_stop:
+    Image|endswith|any:
+      - '\net.exe'
+      - '\net1.exe'
+      - '\sc.exe'
+    CommandLine|contains|any:
+      - 'stop SDRSVC'
+      - 'stop ShadowProtectSvc'
+      - 'stop MSExchangeIS'
+      - 'stop MSSQLServer'
+      - 'stop MSSQL'
+      - 'stop vss'
+      - 'stop BackupExecJobEngine'
+      - 'stop wbengine'
+  powershell_shadow_delete:
+    Image|endswith|any:
+      - '\powershell.exe'
+      - '\pwsh.exe'
+    CommandLine|contains|any:
+      - 'Win32_ShadowCopy'
+      - 'vssadmin delete'
+      - 'Get-WmiObject Win32_Volume'
+      - 'Win32_BackupFile'
+      - 'Delete()'
+  condition: vssadmin_delete or wmic_shadowcopy_delete or bcdedit_recovery_off or wbadmin_catalog_delete or reagentc_disable or disable_computer_restore or backup_service_stop or powershell_shadow_delete
+falsepositives:
+  - Authorized storage administrators managing shadow copy storage limits
+  - Backup software performing pre-backup housekeeping
+  - IT staff disabling WinRE on managed endpoints per corporate policy
+level: critical
+fields:
+  - Image
+  - CommandLine
+  - ParentImage
+  - User
+  - Computer
+  - EventID
+custom:
+  mitre_tactic: "TA0040 – Impact"
+  mitre_technique: "T1490 – Inhibit System Recovery"
+  windows_event_ids: ["4688", "1", "7036", "7040"]
+  investigation_note: |
+    This technique almost always precedes ransomware payload execution.
+    Chain of vssadmin delete + bcdedit recoveryenabled no = imminent encryption.
+    Correlate with T1486 indicators (file encryption, ransom note drops).
+    Time correlation: these commands typically run within minutes of each other.
+    Disable-ComputerRestore targets Windows System Restore points specifically.

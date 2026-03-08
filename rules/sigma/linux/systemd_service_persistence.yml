@@ -1,0 +1,78 @@
+title: Linux Systemd – Malicious Service Creation and Manipulation
+id: a9b0c1d2-1919-4a3b-b4c5-d6e7f8a9b0c1
+status: stable
+description: |
+  Detects creation or manipulation of systemd service units for persistence on Linux.
+  Attackers create malicious .service files in /etc/systemd/, /usr/lib/systemd/, or
+  user-level ~/.config/systemd/ directories to maintain persistent access. Also detects
+  timer-based persistence and service file modifications.
+references:
+  - https://attack.mitre.org/techniques/T1543/002/
+  - https://www.freedesktop.org/software/systemd/man/systemd.service.html
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.persistence
+  - attack.t1543.002
+  - platform.linux
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  systemctl_enable:
+    CommandLine|contains|any:
+      - 'systemctl enable'
+      - 'systemctl daemon-reload'
+      - 'systemctl start'
+  service_file_creation:
+    TargetFilename|contains|any:
+      - '/etc/systemd/system/'
+      - '/usr/lib/systemd/system/'
+      - '/.config/systemd/user/'
+      - '/run/systemd/system/'
+    TargetFilename|endswith|any:
+      - '.service'
+      - '.timer'
+  suspicious_service_content:
+    CommandLine|contains|any:
+      - 'ExecStart=/tmp/'
+      - 'ExecStart=/dev/shm/'
+      - 'ExecStart=/var/tmp/'
+      - 'ExecStartPre='
+      - 'ExecStartPost='
+    CommandLine|contains|any:
+      - 'bash -c'
+      - 'sh -c'
+      - 'curl'
+      - 'wget'
+      - 'python'
+      - 'nc '
+      - 'ncat'
+  systemd_generator:
+    CommandLine|contains|any:
+      - '/etc/systemd/system-generators/'
+      - '/usr/lib/systemd/system-generators/'
+  condition: (systemctl_enable and suspicious_service_content) or service_file_creation or systemd_generator
+falsepositives:
+  - Legitimate package installation creating systemd services
+  - System administrators deploying new services
+  - Container orchestration creating ephemeral services
+level: high
+fields:
+  - CommandLine
+  - TargetFilename
+  - User
+  - PID
+  - ParentImage
+  - Hostname
+custom:
+  mitre_tactic: "TA0003 – Persistence"
+  mitre_technique: "T1543.002 – Create or Modify System Process: Systemd Service"
+  chainsaw_compatible: false
+  investigation_note: |
+    Examine the .service file content for ExecStart pointing to world-writable
+    directories (/tmp, /dev/shm). Services with Restart=always and short
+    RestartSec values indicate malware ensuring persistence. System generators
+    in /etc/systemd/system-generators/ execute before any services start — a
+    powerful and stealthy persistence mechanism. Check `systemctl list-unit-files`
+    for recently enabled units.

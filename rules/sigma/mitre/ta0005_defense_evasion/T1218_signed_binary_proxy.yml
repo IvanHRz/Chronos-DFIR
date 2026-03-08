@@ -1,0 +1,81 @@
+title: Signed Binary Proxy Execution – LOLBin Abuse for Defense Evasion
+id: b8c9d0e1-f6a7-4234-e124-356789012345
+status: stable
+description: |
+  Detects abuse of signed Windows binaries (LOLBins) to proxy execution of malicious code.
+  These binaries are trusted by default, bypass application whitelisting, and leave minimal
+  forensic traces. Covers msiexec, cmstp, control.exe, pcalua.exe, and forfiles abuse.
+references:
+  - https://attack.mitre.org/techniques/T1218/
+  - https://lolbas-project.github.io/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.defense_evasion
+  - attack.t1218
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  msiexec_remote:
+    Image|endswith: '\msiexec.exe'
+    CommandLine|contains|any:
+      - '/q http'
+      - '/q https'
+      - '/q \\\\'
+      - '/quiet http'
+      - '/quiet https'
+      - '/qn http'
+      - '/qn https'
+      - '/i http'
+      - '/i https'
+  cmstp_abuse:
+    Image|endswith: '\cmstp.exe'
+    CommandLine|contains|any:
+      - '/s'
+      - '/ni'
+      - '.inf'
+  control_dll_load:
+    Image|endswith: '\control.exe'
+    CommandLine|contains: '.dll'
+  pcalua_proxy:
+    Image|endswith: '\pcalua.exe'
+    CommandLine|contains: '-a'
+  forfiles_exec:
+    Image|endswith: '\forfiles.exe'
+    CommandLine|contains|any:
+      - '/c cmd'
+      - '/c powershell'
+      - '/c mshta'
+      - '/c calc'
+      - '/c "cmd'
+  infdefaultinstall:
+    Image|endswith: '\InfDefaultInstall.exe'
+  msdt_follina:
+    Image|endswith: '\msdt.exe'
+    CommandLine|contains|any:
+      - 'PCWDiagnostic'
+      - 'ms-msdt:'
+      - 'IT_BrowseForFile='
+  condition: msiexec_remote or cmstp_abuse or control_dll_load or pcalua_proxy or forfiles_exec or infdefaultinstall or msdt_follina
+falsepositives:
+  - Legitimate MSI package installations from network shares
+  - VPN or network profile deployments using cmstp
+  - Control Panel applets loaded through normal user interaction
+level: high
+fields:
+  - Image
+  - CommandLine
+  - ParentImage
+  - User
+  - EventID
+custom:
+  mitre_tactic: "TA0005 – Defense Evasion"
+  mitre_technique: "T1218 – Signed Binary Proxy Execution"
+  windows_event_ids: ["4688", "1"]
+  investigation_note: |
+    LOLBin abuse bypasses application whitelisting and leaves trusted-binary traces.
+    Check what payload was loaded: DLL path, MSI URL, INF file content.
+    msiexec fetching from HTTP/HTTPS is almost always malicious in enterprise environments.
+    Correlate with network connections (Sysmon EventID 3) from the same process.
+    CMSTP with /s and .inf files is a known AppLocker bypass technique.

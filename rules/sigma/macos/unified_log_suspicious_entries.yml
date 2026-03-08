@@ -1,0 +1,88 @@
+title: macOS Unified Log – Suspicious Subsystem Activity
+id: c7d8e9f0-2727-4c1d-d2e3-f4a5b6c7d8e9
+status: stable
+description: |
+  Detects suspicious entries in the macOS Unified Log across critical subsystems
+  including security, networking, kernel extensions, and endpoint security.
+  The Unified Log is the primary forensic artifact on modern macOS (10.12+) and
+  captures events from all system components in a structured format.
+references:
+  - https://attack.mitre.org/techniques/T1059/004/
+  - https://eclecticlight.co/2023/09/04/a-guide-to-unified-log-predicates/
+  - https://www.crowdstrike.com/blog/using-macos-unified-logs-for-threat-hunting/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.execution
+  - attack.t1059.004
+  - attack.defense_evasion
+  - platform.macos
+logsource:
+  category: unified_log
+  product: macos
+detection:
+  endpoint_security_events:
+    Subsystem|contains|any:
+      - 'com.apple.endpointsecurity'
+      - 'com.apple.securityd'
+      - 'com.apple.authd'
+    Message|contains|any:
+      - 'denied'
+      - 'blocked'
+      - 'violation'
+      - 'tamper'
+  network_anomaly:
+    Subsystem|contains|any:
+      - 'com.apple.networkd'
+      - 'com.apple.nesessionmanager'
+    Message|contains|any:
+      - 'DNS tunnel'
+      - 'proxy'
+      - 'VPN'
+      - 'unusual port'
+      - 'connection refused'
+  kernel_extension:
+    Subsystem|contains: 'com.apple.kext'
+    Message|contains|any:
+      - 'loaded'
+      - 'unloaded'
+      - 'not signed'
+      - 'invalid signature'
+  screensharing_remote:
+    Subsystem|contains|any:
+      - 'com.apple.screensharing'
+      - 'com.apple.RemoteDesktop'
+    Message|contains|any:
+      - 'connection from'
+      - 'authenticated'
+      - 'session started'
+  dyld_injection:
+    Message|contains|any:
+      - 'DYLD_INSERT_LIBRARIES'
+      - 'DYLD_LIBRARY_PATH'
+      - 'DYLD_FRAMEWORK_PATH'
+      - 'dyld: warning'
+  condition: endpoint_security_events or network_anomaly or kernel_extension or screensharing_remote or dyld_injection
+falsepositives:
+  - Legitimate kernel extensions from security vendors
+  - Authorized screen sharing sessions
+  - VPN connections from corporate software
+level: medium
+fields:
+  - Subsystem
+  - Category
+  - Message
+  - ProcessImagePath
+  - SenderImagePath
+  - Timestamp
+  - PID
+custom:
+  mitre_tactic: "TA0002 – Execution"
+  mitre_technique: "T1059.004 – Command and Scripting Interpreter: Unix Shell"
+  chainsaw_compatible: false
+  investigation_note: |
+    Use `log show --predicate` with subsystem filters to extract relevant events.
+    DYLD_INSERT_LIBRARIES is the primary code injection mechanism on macOS — any
+    entry is suspicious unless from a known security product. Unsigned kexts require
+    SIP to be disabled. Screen sharing events with unexpected source IPs indicate
+    unauthorized remote access. Export with `log collect` for offline analysis.

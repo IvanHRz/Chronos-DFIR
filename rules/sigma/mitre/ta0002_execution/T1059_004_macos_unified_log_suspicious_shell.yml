@@ -1,0 +1,82 @@
+title: macOS Unified Log - Suspicious Shell or Interpreter Execution
+id: 7b2e4f18-c93a-4d76-8e12-cd5678901234
+status: stable
+description: |
+  Detects suspicious shell or scripting interpreter activity captured in macOS
+  Unified Logs (.txt format parsed by Chronos). Indicators include unusual
+  processes spawning shells, scripting interpreters called from unexpected
+  parents, or known LOLBin abuse patterns on macOS.
+  Maps to MITRE T1059.004 — Command and Scripting Interpreter: Unix Shell.
+references:
+  - https://attack.mitre.org/techniques/T1059/004/
+  - https://github.com/center-for-threat-informed-defense/mac-threat-matrix
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/07
+tags:
+  - attack.execution
+  - attack.t1059.004
+  - attack.defense_evasion
+  - attack.t1027
+  - platform.macos
+logsource:
+  category: process_creation
+  product: macos
+  # Chronos ingesta: Unified Logs parseados (.txt) — syslog format
+  # Campos esperados: Time, Source_Entity (process[pid]), Destination_Entity (message),
+  #                   Computer (host), EventID (macOS_Unified_Log)
+detection:
+  suspicious_interpreter:
+    Destination_Entity|contains|any:
+      - "python -c "
+      - "python3 -c "
+      - "ruby -e "
+      - "perl -e "
+      - "osascript -e "
+      - "osascript -l JavaScript"
+      - "bash -i"
+      - "sh -i"
+      - "zsh -c "
+      - "/dev/tcp/"
+      - "exec 5<>"
+      - "base64 -d"
+      - "base64 --decode"
+      - "| bash"
+      - "| sh"
+  lolbin_abuse:
+    Destination_Entity|contains|any:
+      - "curl.*|.*bash"
+      - "curl.*|.*sh"
+      - "wget.*|.*bash"
+      - "nohup "
+      - "disown"
+      - "screen -dm"
+      - "launchctl submit"
+      - "xattr -d com.apple.quarantine"
+  suspicious_source:
+    Source_Entity|contains|any:
+      - "com.apple.xpc"
+      - "Safari"
+      - "Google Chrome"
+      - "Firefox"
+      - "curl"
+      - "python"
+      - "ruby"
+  condition: suspicious_interpreter or lolbin_abuse or (suspicious_source and suspicious_interpreter)
+falsepositives:
+  - Legitimate DevOps automation scripts (Homebrew, Ansible, Chef)
+  - Developer workstations with high Python/Ruby usage
+  - macOS system maintenance tasks
+level: medium
+fields:
+  - Time
+  - Source_Entity
+  - Destination_Entity
+  - Computer
+custom:
+  mitre_tactic: "TA0002 — Execution"
+  mitre_technique: "T1059.004 — Unix Shell"
+  chronos_artifact: "macOS/Unified_Logs (.txt syslog format)"
+  investigation_note: |
+    Correlate Source_Entity (proceso padre) con LaunchDaemon rules (T1543.004).
+    Buscar Destination_Entity que contenga IPs o dominios externos (C2 candidates).
+    El campo Computer identifica el host afectado — pivotear en EVTX si dual-boot.

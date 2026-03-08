@@ -1,0 +1,80 @@
+title: Linux Container Escape – Docker and Kubernetes Breakout Indicators
+id: d0e1f2a3-4040-4d4e-e5f6-a7b8c9d0e1f2
+status: stable
+description: |
+  Detects indicators of container escape attempts from Docker or Kubernetes
+  environments. Covers privileged container abuse, cgroup escape, mount namespace
+  manipulation, Docker socket access, and Kubernetes service account token theft.
+  Container escapes are critical as they provide access to the underlying host.
+references:
+  - https://attack.mitre.org/techniques/T1611/
+  - https://blog.trailofbits.com/2019/07/19/understanding-docker-container-escapes/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.privilege_escalation
+  - attack.t1611
+  - platform.linux
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  docker_socket_access:
+    CommandLine|contains|any:
+      - '/var/run/docker.sock'
+      - 'docker.sock'
+      - 'docker exec'
+      - 'docker run.*--privileged'
+      - 'docker run.*--pid=host'
+      - 'docker run.*--net=host'
+      - 'docker cp'
+  cgroup_escape:
+    CommandLine|contains|any:
+      - '/sys/fs/cgroup'
+      - 'release_agent'
+      - 'notify_on_release'
+      - 'cgroup.*mkdir'
+  mount_namespace:
+    CommandLine|contains|any:
+      - 'nsenter'
+      - 'unshare'
+      - 'mount.*proc'
+      - '/proc/1/root'
+      - '/proc/sched_debug'
+  kubelet_access:
+    CommandLine|contains|any:
+      - 'serviceaccount/token'
+      - 'kubernetes.io/serviceaccount'
+      - '/var/run/secrets/kubernetes'
+      - 'kubectl.*--token'
+      - 'curl.*10.96.0.1'
+  host_filesystem_access:
+    CommandLine|contains|any:
+      - '/host/'
+      - '/hostfs/'
+      - 'chroot /mnt'
+      - 'chroot /host'
+  condition: docker_socket_access or cgroup_escape or mount_namespace or kubelet_access or host_filesystem_access
+falsepositives:
+  - Container management tools accessing Docker socket
+  - Legitimate namespace operations in container orchestration
+  - Kubernetes operators reading service account tokens
+level: critical
+fields:
+  - CommandLine
+  - Image
+  - User
+  - PID
+  - PPID
+  - Hostname
+  - ContainerId
+custom:
+  mitre_tactic: "TA0004 – Privilege Escalation"
+  mitre_technique: "T1611 – Escape to Host"
+  chainsaw_compatible: false
+  investigation_note: |
+    Docker socket access from within a container grants full control over the Docker
+    daemon (equivalent to root on the host). cgroup release_agent escape works by
+    writing a command to the release_agent file and triggering it. /proc/1/root
+    access from a container provides access to the host filesystem. Check if the
+    container was started with --privileged flag — this disables all security.

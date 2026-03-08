@@ -1,0 +1,76 @@
+title: ShimCache AppCompatCache – Suspicious Binary Evidence
+id: b2c3d4e5-2002-4b6c-c7d8-e9f0a1b2c3d4
+status: stable
+description: |
+  Detects suspicious entries in the Windows Application Compatibility Cache (ShimCache /
+  AppCompatCache) that indicate the presence or execution of attacker tools. ShimCache
+  records binaries that exist on the filesystem even if never executed, making it valuable
+  for proving a file was at least present. Entries from unusual paths or with known tool
+  names are flagged. Parsed by tools like AppCompatCacheParser, ShimCacheParser, or RegRipper.
+references:
+  - https://attack.mitre.org/techniques/T1059/
+  - https://www.mandiant.com/resources/blog/caching-out-the-val
+  - https://github.com/EricZimmerman/AppCompatCacheParser
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.execution
+  - attack.t1059
+  - attack.defense_evasion
+  - artifact.shimcache
+logsource:
+  category: shimcache
+  product: windows
+detection:
+  suspicious_binary_path:
+    Path|contains|any:
+      - '\Temp\'
+      - '\tmp\'
+      - '\ProgramData\'
+      - '\AppData\'
+      - '$Recycle.Bin'
+      - '\Public\'
+      - '\perflogs\'
+      - '\Windows\Debug\'
+      - '\Windows\Temp\'
+    Path|endswith|any:
+      - '.exe'
+      - '.dll'
+      - '.scr'
+      - '.cpl'
+      - '.bat'
+      - '.ps1'
+  tool_name_match:
+    Path|contains|any:
+      - 'mimikatz'
+      - 'psexec'
+      - 'procdump'
+      - 'lazagne'
+      - 'rubeus'
+      - 'certutil'
+      - 'wce'
+      - 'pwdump'
+      - 'gsecdump'
+      - 'fgdump'
+      - 'nmap'
+      - 'advanced ip scanner'
+      - 'cobalt'
+  condition: suspicious_binary_path or tool_name_match
+falsepositives:
+  - Legitimate software installers writing to Temp directories
+  - Portable applications stored in non-standard paths
+level: medium
+fields:
+  - Path
+  - LastModifiedTime
+  - ExecutedFlag
+  - CacheEntryPosition
+custom:
+  mitre_tactic: "TA0002 – Execution"
+  mitre_technique: "T1059 – Command and Scripting Interpreter"
+  chainsaw_compatible: false
+  investigation_note: |
+    ShimCache entries are ordered — position in the cache indicates relative timing.
+    The ExecutedFlag (available on Win7/2008R2) indicates actual execution vs mere
+    file presence. Correlate with Prefetch and AmCache for execution confirmation.
+    Entries persist across reboots until the cache limit is reached (~1024 entries).

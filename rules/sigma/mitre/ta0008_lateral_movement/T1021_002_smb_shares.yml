@@ -1,0 +1,94 @@
+title: SMB/Windows Admin Share Lateral Movement – PsExec and Remote Service Install
+id: b4c5d6e7-f2a3-4890-4780-912345678901
+status: stable
+description: |
+  Detects lateral movement via SMB admin shares (C$, ADMIN$, IPC$) and remote service
+  installation. Covers net use to administrative shares, PsExec service creation events,
+  and remote service installs via sc.exe. These are primary indicators of adversary lateral
+  movement across Windows domain environments.
+references:
+  - https://attack.mitre.org/techniques/T1021/002/
+  - https://attack.mitre.org/techniques/T1570/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.lateral_movement
+  - attack.t1021.002
+  - attack.t1570
+logsource:
+  product: windows
+detection:
+  net_use_admin_shares:
+    Image|endswith|any:
+      - '\net.exe'
+      - '\net1.exe'
+    CommandLine|contains|any:
+      - 'net use \\\\*\\C$'
+      - 'net use \\\\*\\ADMIN$'
+      - 'net use \\\\*\\IPC$'
+      - '\\C$ /user:'
+      - '\\ADMIN$ /user:'
+      - '\\IPC$ /user:'
+  psexec_service:
+    EventID: '7045'
+    Description|contains|any:
+      - 'PSEXESVC'
+      - 'psexec'
+      - 'PsExec'
+  psexec_cmdline:
+    Image|endswith|any:
+      - '\PsExec.exe'
+      - '\PsExec64.exe'
+      - '\psexec.exe'
+    CommandLine|contains|any:
+      - '\\\\*'
+      - '-s cmd'
+      - '-s powershell'
+      - '-accepteula'
+  sc_remote_create:
+    Image|endswith: '\sc.exe'
+    CommandLine|contains|any:
+      - '\\\\* create'
+      - '\\\\* start'
+      - 'create binPath='
+  remote_service_install:
+    EventID: '7045'
+    CommandLine|contains|any:
+      - 'cmd.exe /c'
+      - 'powershell'
+      - '%COMSPEC%'
+  wmi_lateral:
+    Image|endswith: '\wmic.exe'
+    CommandLine|contains|any:
+      - '/node:'
+      - 'process call create'
+  copy_to_share:
+    CommandLine|contains|any:
+      - 'copy \\\\*\\C$'
+      - 'copy * \\\\*\\ADMIN$'
+      - 'xcopy * \\\\*'
+      - 'robocopy * \\\\'
+  condition: net_use_admin_shares or psexec_service or psexec_cmdline or sc_remote_create or remote_service_install or wmi_lateral or copy_to_share
+falsepositives:
+  - System administrators using PsExec for legitimate remote management
+  - SCCM/MECM software deployment via admin shares
+  - Backup software accessing admin shares for file-level backup
+level: high
+fields:
+  - Image
+  - CommandLine
+  - ParentImage
+  - User
+  - Computer
+  - SourceIp
+  - EventID
+custom:
+  mitre_tactic: "TA0008 – Lateral Movement"
+  mitre_technique: "T1021.002 – SMB/Windows Admin Shares"
+  windows_event_ids: ["4688", "1", "7045", "5140", "5145"]
+  investigation_note: |
+    PsExec creates PSEXESVC service on target — check EventID 7045 on remote hosts.
+    Admin share access (C$, ADMIN$) from non-admin workstations is always suspicious.
+    Correlate with logon events (4624 type 3) to identify source of lateral movement.
+    Service installs with cmd.exe or powershell binPath are almost always malicious.
+    Check for file copies to ADMIN$\Temp which is the PsExec staging directory.

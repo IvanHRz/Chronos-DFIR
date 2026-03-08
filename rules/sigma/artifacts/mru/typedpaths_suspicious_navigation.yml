@@ -1,0 +1,68 @@
+title: TypedPaths – Suspicious Explorer Address Bar Navigation
+id: f2a3b4c5-1212-4f6a-a7b8-c9d0e1f2a3b4
+status: stable
+description: |
+  Detects suspicious entries in the Windows TypedPaths registry key, which records
+  paths manually typed into the Explorer address bar. Attackers navigating to UNC
+  paths, administrative shares, or sensitive system directories via Explorer leave
+  traces here. This artifact is distinct from ShellBags (which record folder view
+  settings) and reveals intentional, targeted navigation.
+references:
+  - https://attack.mitre.org/techniques/T1083/
+  - https://attack.mitre.org/techniques/T1021/002/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.discovery
+  - attack.t1083
+  - attack.lateral_movement
+  - attack.t1021.002
+  - artifact.typedpaths
+logsource:
+  category: typedpaths
+  product: windows
+detection:
+  unc_paths:
+    TypedPath|contains|any:
+      - '\\\\'
+      - '\\\\192.'
+      - '\\\\10.'
+      - '\\\\172.'
+  admin_shares:
+    TypedPath|contains|any:
+      - 'C$'
+      - 'ADMIN$'
+      - 'IPC$'
+      - 'D$'
+      - 'E$'
+  system_paths:
+    TypedPath|contains|any:
+      - '\Windows\System32\config'
+      - '\Windows\NTDS'
+      - '\Windows\repair'
+      - '\sysvol'
+      - '\NETLOGON'
+  web_urls:
+    TypedPath|contains|any:
+      - 'http://'
+      - 'https://'
+      - 'ftp://'
+  condition: unc_paths or admin_shares or system_paths or web_urls
+falsepositives:
+  - System administrators accessing shares during normal operations
+  - Users typing URLs into Explorer address bar (redirects to browser)
+level: medium
+fields:
+  - TypedPath
+  - MRUPosition
+  - LastWriteTime
+  - User
+custom:
+  mitre_tactic: "TA0008 – Lateral Movement"
+  mitre_technique: "T1021.002 – Remote Services: SMB/Windows Admin Shares"
+  chainsaw_compatible: false
+  investigation_note: |
+    TypedPaths are stored in NTUSER.DAT under Software\Microsoft\Windows\CurrentVersion\
+    Explorer\TypedPaths. UNC paths to admin shares (C$, ADMIN$) combined with
+    anomalous logon events (4624 Type 3) strongly indicate lateral movement.
+    Cross-reference with ShellBags for the same paths to confirm actual access.

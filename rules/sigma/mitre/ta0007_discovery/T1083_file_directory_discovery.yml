@@ -1,0 +1,70 @@
+title: File and Directory Discovery – Enumeration of Sensitive Paths
+id: e5f6a7b8-c3d4-4901-bef1-023456789012
+status: stable
+description: |
+  Detects file and directory enumeration commands targeting sensitive locations such as
+  user profiles, configuration directories, and network shares. Adversaries use dir, tree,
+  Get-ChildItem, and forfiles to map the file system and locate credentials, documents,
+  and configuration files for staging and exfiltration.
+references:
+  - https://attack.mitre.org/techniques/T1083/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.discovery
+  - attack.t1083
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  dir_sensitive:
+    Image|endswith: '\cmd.exe'
+    CommandLine|contains|any:
+      - 'dir /s /b'
+      - 'dir /s *.doc'
+      - 'dir /s *.xls'
+      - 'dir /s *.pdf'
+      - 'dir /s *.config'
+      - 'dir /s *.rdp'
+      - 'dir /s *.kdbx'
+      - 'dir /s *.pem'
+      - 'dir /s *.key'
+      - 'dir C:\Users'
+  tree_enum:
+    Image|endswith: '\tree.com'
+  get_childitem:
+    CommandLine|contains|any:
+      - 'Get-ChildItem -Recurse'
+      - 'gci -Recurse'
+      - 'ls -Recurse'
+      - 'dir -Recurse'
+      - 'Get-ChildItem -Path C:\Users'
+  forfiles_enum:
+    Image|endswith: '\forfiles.exe'
+    CommandLine|contains|any:
+      - '/S /M *.doc'
+      - '/S /M *.xls'
+      - '/S /M *.pdf'
+      - '/S /M *.config'
+      - '/P C:\Users'
+  condition: dir_sensitive or tree_enum or get_childitem or forfiles_enum
+falsepositives:
+  - IT asset inventory scripts
+  - File management and cleanup utilities
+  - Backup software enumerating directories
+level: low
+fields:
+  - Image
+  - CommandLine
+  - ParentImage
+  - User
+  - EventID
+custom:
+  mitre_tactic: "TA0007 – Discovery"
+  mitre_technique: "T1083 – File and Directory Discovery"
+  windows_event_ids: ["4688", "1"]
+  investigation_note: |
+    Look for file enumeration followed by archive creation (T1560) and exfil (T1048).
+    Pay attention to enumeration targeting *.kdbx, *.key, *.pem — credential harvesting.
+    Recursive enumeration of C:\Users from a non-admin context is suspicious.
+    Correlate with subsequent file access events in Sysmon EventID 11 (FileCreate).

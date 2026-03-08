@@ -1,0 +1,87 @@
+title: Suspicious Prefetch Entries – Hacking Tool Execution Evidence
+id: a1b2c3d4-1001-4a5b-b6c7-d8e9f0a1b2c3
+status: stable
+description: |
+  Detects suspicious entries in Windows Prefetch (.pf) files that indicate execution
+  of known offensive tools, living-off-the-land binaries used maliciously, or programs
+  executed from unusual paths (Temp, Recycle Bin, ProgramData). Prefetch artifacts
+  persist even after the binary is deleted, making them critical for proving execution.
+  Parsed by tools like PECmd, WinPrefetchView, or Chronos native ingestion.
+references:
+  - https://attack.mitre.org/techniques/T1059/
+  - https://www.sans.org/blog/digital-forensics-prefetch-artifacts/
+  - https://github.com/EricZimmerman/PECmd
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.execution
+  - attack.t1059
+  - attack.defense_evasion
+  - artifact.prefetch
+logsource:
+  category: prefetch
+  product: windows
+detection:
+  offensive_tools:
+    ExecutableName|contains|any:
+      - 'MIMIKATZ'
+      - 'LAZAGNE'
+      - 'RUBEUS'
+      - 'SEATBELT'
+      - 'SHARPHOUND'
+      - 'BLOODHOUND'
+      - 'COVENANT'
+      - 'PSEXEC'
+      - 'PROCDUMP'
+      - 'NANODUMP'
+      - 'SAFETYKATZ'
+      - 'SHARPUP'
+      - 'CERTIFY'
+      - 'WHISKER'
+      - 'KEKEO'
+      - 'INCOGNITO'
+      - 'POWERCAT'
+      - 'CHISEL'
+      - 'LIGOLO'
+      - 'PLINK'
+  suspicious_paths:
+    FilePath|contains|any:
+      - '\Temp\'
+      - '\tmp\'
+      - '$Recycle.Bin'
+      - '\ProgramData\'
+      - '\AppData\Local\Temp\'
+      - '\Downloads\'
+      - '\Public\'
+      - '\Music\'
+      - '\Videos\'
+  encoded_names:
+    ExecutableName|contains|any:
+      - 'BASE64'
+      - 'ENCODE'
+      - 'INVOKE-'
+      - 'POWERVIEW'
+      - 'POWERUP'
+  condition: offensive_tools or (suspicious_paths and encoded_names)
+falsepositives:
+  - Legitimate penetration testing activities
+  - Security tools used by authorized IT staff (e.g., PsExec for administration)
+  - File names coincidentally matching tool names
+level: high
+fields:
+  - ExecutableName
+  - FilePath
+  - RunCount
+  - LastRunTime
+  - PrefetchHash
+  - Volume
+custom:
+  mitre_tactic: "TA0002 – Execution"
+  mitre_technique: "T1059 – Command and Scripting Interpreter"
+  chainsaw_compatible: false
+  investigation_note: |
+    Check RunCount to determine how many times the tool was executed.
+    Correlate LastRunTime with logon events (4624) and process creation (4688).
+    The Prefetch hash in the filename encodes the execution path — different
+    paths produce different .pf files for the same binary. Look for the same
+    tool with multiple hashes indicating execution from different locations.

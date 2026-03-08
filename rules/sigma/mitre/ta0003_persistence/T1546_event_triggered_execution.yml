@@ -1,0 +1,97 @@
+title: Event Triggered Execution – WMI, Accessibility Features, IFEO
+id: e5f6a7b8-3535-4e9f-f0a1-b2c3d4e5f6a7
+status: stable
+description: |
+  Detects event-triggered execution persistence mechanisms including WMI event
+  subscriptions, Image File Execution Options (IFEO) debugger hijacking,
+  Accessibility Feature backdoors (sethc, utilman, narrator), and AppInit_DLLs.
+  These techniques trigger malicious code execution when specific system events
+  occur or when specific applications are launched.
+references:
+  - https://attack.mitre.org/techniques/T1546/
+  - https://attack.mitre.org/techniques/T1546/003/
+  - https://attack.mitre.org/techniques/T1546/008/
+  - https://attack.mitre.org/techniques/T1546/012/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.persistence
+  - attack.t1546
+  - attack.t1546.003
+  - attack.t1546.008
+  - attack.t1546.012
+  - chainsaw
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  wmi_subscription:
+    CommandLine|contains|any:
+      - 'ActiveScriptEventConsumer'
+      - 'CommandLineEventConsumer'
+      - '__EventFilter'
+      - '__EventConsumer'
+      - '__FilterToConsumerBinding'
+      - 'Register-WmiEvent'
+      - 'Set-WmiInstance'
+  ifeo_debugger:
+    CommandLine|contains|any:
+      - 'Image File Execution Options'
+      - 'GlobalFlag'
+      - 'Debugger'
+    CommandLine|contains|any:
+      - 'reg add'
+      - 'reg.exe add'
+      - 'New-ItemProperty'
+  accessibility_backdoor:
+    CommandLine|contains|any:
+      - 'sethc.exe'
+      - 'utilman.exe'
+      - 'narrator.exe'
+      - 'magnify.exe'
+      - 'osk.exe'
+      - 'DisplaySwitch.exe'
+      - 'AtBroker.exe'
+    CommandLine|contains|any:
+      - 'copy'
+      - 'move'
+      - 'rename'
+      - 'ren '
+      - 'Replace'
+      - 'cmd.exe'
+  appinit_dlls:
+    CommandLine|contains|any:
+      - 'AppInit_DLLs'
+      - 'LoadAppInit_DLLs'
+  wmi_event_id:
+    EventID:
+      - '5857'
+      - '5858'
+      - '5859'
+      - '5860'
+      - '5861'
+  condition: wmi_subscription or ifeo_debugger or accessibility_backdoor or appinit_dlls or wmi_event_id
+falsepositives:
+  - Legitimate WMI monitoring scripts
+  - Application compatibility settings using IFEO
+  - Accessibility software using legitimate system features
+level: critical
+fields:
+  - Image
+  - CommandLine
+  - EventID
+  - ParentImage
+  - User
+  - Computer
+  - TargetObject
+custom:
+  mitre_tactic: "TA0003 – Persistence"
+  mitre_technique: "T1546 – Event Triggered Execution"
+  windows_event_ids: ["5857", "5858", "5859", "5860", "5861"]
+  chainsaw_compatible: true
+  investigation_note: |
+    WMI event subscriptions (Events 5857-5861) persist in the WMI repository and
+    survive reboots. IFEO debugger hijacking replaces a legitimate executable's
+    launch with an attacker binary. The classic accessibility backdoor replaces
+    sethc.exe (Sticky Keys) with cmd.exe — accessible from the login screen without
+    authentication. Check %SystemRoot%\System32\wbem\Repository for WMI artifacts.

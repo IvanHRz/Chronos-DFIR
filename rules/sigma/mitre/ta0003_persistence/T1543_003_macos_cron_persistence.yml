@@ -1,0 +1,129 @@
+title: macOS Cron-Based Persistence – Scheduled Job Abuse
+id: a3b4c5d6-e7f8-9012-abcd-123456789012
+status: stable
+description: |
+  Detects cron-based persistence on macOS systems. Attackers add malicious crontab
+  entries to execute scripts or binaries at scheduled intervals, providing persistent
+  access that survives reboots. Suspicious indicators include entries executing scripts
+  from world-writable directories (/tmp, /var/tmp), downloading content via curl/wget,
+  spawning reverse shells, or running scripts with obfuscated names. Also detects
+  system-level cron modifications in /etc/cron.d/ and /etc/periodic/ directories.
+  Maps to MITRE T1053.003 (Scheduled Task/Job: Cron) under Persistence.
+references:
+  - https://attack.mitre.org/techniques/T1053/003/
+  - https://attack.mitre.org/techniques/T1543/003/
+  - https://www.sentinelone.com/blog/how-malware-persists-on-macos/
+  - https://objective-see.org/blog/blog_0x68.html
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/07
+tags:
+  - attack.persistence
+  - attack.t1053.003
+  - attack.t1543.003
+  - platform.macos
+logsource:
+  category: process_creation
+  product: macos
+  # Chronos ingestion: macOS Unified Logs, Persistence scanner output
+  # Expected fields: EventID (macOS_Persistence_Info or crontab_entry),
+  #                  Destination_Entity (cron command/script path),
+  #                  Source_Entity (crontab owner/user),
+  #                  CommandLine (full crontab line), Image (binary path)
+detection:
+  crontab_modification:
+    EventID:
+      - 'macOS_Persistence_Info'
+      - 'crontab_entry'
+      - 'cron_added'
+  suspicious_cron_paths:
+    Destination_Entity|contains|any:
+      - '/tmp/'
+      - '/var/tmp/'
+      - '/private/tmp/'
+      - '/dev/shm/'
+      - '.sh'
+      - '.py'
+      - 'python'
+      - 'python3'
+      - 'ruby'
+      - 'perl'
+      - 'osascript'
+      - 'bash -c'
+      - 'sh -c'
+      - 'zsh -c'
+  cron_network_activity:
+    Destination_Entity|contains|any:
+      - 'curl '
+      - 'wget '
+      - 'nc '
+      - 'ncat '
+      - '/dev/tcp/'
+      - '/dev/udp/'
+      - 'python -c'
+      - 'python3 -c'
+  crontab_write_cmd:
+    Image|endswith|any:
+      - '/crontab'
+      - '/usr/bin/crontab'
+    CommandLine|contains|any:
+      - '-e'
+      - '-l'
+      - '-r'
+  etc_cron_modification:
+    Destination_Entity|contains|any:
+      - '/etc/cron.d/'
+      - '/etc/cron.daily/'
+      - '/etc/cron.hourly/'
+      - '/etc/cron.weekly/'
+      - '/etc/periodic/'
+      - '/var/spool/cron/'
+  reverse_shell_cron:
+    Destination_Entity|contains|any:
+      - 'bash -i'
+      - '/bin/sh -i'
+      - 'exec /bin/bash'
+      - '0>&1'
+      - '>&2'
+      - 'mkfifo'
+  root_crontab_suspicious:
+    Source_Entity|contains|any:
+      - 'root'
+      - 'daemon'
+    Destination_Entity|contains|any:
+      - '/Users/'
+      - 'curl'
+      - 'wget'
+      - '/tmp/'
+  condition: (crontab_modification and suspicious_cron_paths) or (crontab_modification and cron_network_activity) or (crontab_write_cmd and suspicious_cron_paths) or etc_cron_modification or reverse_shell_cron or (root_crontab_suspicious)
+falsepositives:
+  - Legitimate system maintenance cron jobs (log rotation, time sync, software update checks)
+  - Developer tools registering cron jobs (homebrew, pyenv, rbenv update checks)
+  - MDM-managed scheduled tasks deployed by corporate IT
+  - Antivirus or monitoring agents using cron for scheduled scans
+level: high
+fields:
+  - EventID
+  - Destination_Entity
+  - Source_Entity
+  - CommandLine
+  - Image
+  - User
+  - Computer
+custom:
+  mitre_tactic: "TA0003 – Persistence"
+  mitre_technique: "T1053.003 – Scheduled Task/Job: Cron"
+  macos_artifacts:
+    - "/var/spool/cron/crontabs/<user>"
+    - "/etc/crontab"
+    - "/etc/cron.d/"
+    - "/etc/periodic/"
+    - "Unified Log: com.apple.xpc.launchd cron"
+  chronos_artifact: "macOS Persistence scan / Unified Log export"
+  chainsaw_compatible: false
+  investigation_note: |
+    Review the full crontab schedule line in Destination_Entity to assess frequency
+    and timing (e.g., @reboot entries execute on every boot — high severity).
+    Correlate Source_Entity (crontab owner) with account creation/modification events.
+    For root-owned cron entries, verify the binary is signed by a trusted developer.
+    Cross-reference with LaunchDaemon/LaunchAgent persistence (T1543.004) as attackers
+    often use multiple persistence mechanisms simultaneously.

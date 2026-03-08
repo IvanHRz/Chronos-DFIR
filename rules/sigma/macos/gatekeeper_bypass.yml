@@ -1,0 +1,75 @@
+title: macOS Gatekeeper Bypass – Security Control Evasion
+id: f4a5b6c7-2424-4f8a-a9b0-c1d2e3f4a5b6
+status: stable
+description: |
+  Detects attempts to bypass macOS Gatekeeper, which verifies code signatures and
+  notarization before allowing applications to run. Attackers use xattr removal,
+  spctl manipulation, quarantine flag stripping, or app translocation bypass to
+  execute unsigned/unnotarized malware. Also covers SIP status changes.
+references:
+  - https://attack.mitre.org/techniques/T1553/001/
+  - https://objective-see.org/blog/blog_0x64.html
+  - https://support.apple.com/en-us/HT202491
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.defense_evasion
+  - attack.t1553.001
+  - platform.macos
+logsource:
+  category: process_creation
+  product: macos
+detection:
+  quarantine_removal:
+    CommandLine|contains|any:
+      - 'xattr -d com.apple.quarantine'
+      - 'xattr -c'
+      - 'xattr -r -d com.apple.quarantine'
+      - 'xattr -cr'
+  gatekeeper_disable:
+    CommandLine|contains|any:
+      - 'spctl --master-disable'
+      - 'spctl --disable'
+      - 'spctl --add'
+      - 'defaults write com.apple.LaunchServices LSQuarantine -bool NO'
+  unsigned_execution:
+    Message|contains|any:
+      - 'GateKeeper blocked'
+      - 'not notarized'
+      - 'unidentified developer'
+      - 'cannot be opened because'
+      - 'damaged and can not be opened'
+  sip_modification:
+    CommandLine|contains|any:
+      - 'csrutil disable'
+      - 'csrutil clear'
+      - 'csrutil authenticated-root disable'
+  app_translocation_bypass:
+    CommandLine|contains|any:
+      - '/private/var/folders/'
+      - 'AppTranslocation'
+      - 'ditto --norsrc'
+  condition: quarantine_removal or gatekeeper_disable or unsigned_execution or sip_modification or app_translocation_bypass
+falsepositives:
+  - Developers testing unsigned applications during development
+  - IT departments deploying in-house tools not submitted for notarization
+  - Security researchers analyzing malware samples
+level: high
+fields:
+  - Image
+  - CommandLine
+  - Message
+  - User
+  - PID
+  - ParentImage
+  - Timestamp
+custom:
+  mitre_tactic: "TA0005 – Defense Evasion"
+  mitre_technique: "T1553.001 – Subvert Trust Controls: Gatekeeper Bypass"
+  chainsaw_compatible: false
+  investigation_note: |
+    The com.apple.quarantine extended attribute is set on all downloaded files.
+    Mass removal (xattr -r -d) across a directory indicates bulk malware staging.
+    spctl --master-disable completely disables Gatekeeper system-wide. Check the
+    Unified Log for GateKeeper subsystem entries to find blocked applications.
+    SIP status changes require Recovery Mode boot — unusual outside maintenance.

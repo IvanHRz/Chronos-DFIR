@@ -1,0 +1,83 @@
+title: ShellBags – Suspicious Directory Navigation Patterns
+id: b8c9d0e1-8008-4b2c-c3d4-e5f6a7b8c9d0
+status: stable
+description: |
+  Detects suspicious directory browsing patterns recorded in Windows ShellBags,
+  which persist Explorer folder access history even after folders are deleted.
+  ShellBags record folder views, sizes, positions, and timestamps — proving a user
+  navigated to specific directories. Access to system folders, network shares, or
+  directories containing sensitive data are flagged. Parsed by ShellBagsExplorer.
+references:
+  - https://attack.mitre.org/techniques/T1083/
+  - https://www.sans.org/blog/computer-forensic-artifacts-windows-shellbags/
+  - https://github.com/EricZimmerman/ShellBagsExplorer
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.discovery
+  - attack.t1083
+  - artifact.shellbags
+logsource:
+  category: shellbags
+  product: windows
+detection:
+  system_folder_browsing:
+    AbsolutePath|contains|any:
+      - '\Windows\System32\config'
+      - '\Windows\NTDS'
+      - '\Windows\repair'
+      - '\Windows\Panther'
+      - '\Windows\debug'
+      - '\Windows\CSC'
+      - '\System Volume Information'
+  sensitive_data_dirs:
+    AbsolutePath|contains|any:
+      - '\inetpub\wwwroot'
+      - '\xampp\htdocs'
+      - 'SQL Server'
+      - '\Database'
+      - '\Backup'
+      - '\backup'
+      - '\.ssh'
+      - '\.gnupg'
+      - '\.aws'
+      - '\Bitcoin'
+      - '\Ethereum'
+      - '\Wallets'
+  network_share_browsing:
+    AbsolutePath|contains|any:
+      - '\\\\'
+      - 'C$'
+      - 'ADMIN$'
+      - 'IPC$'
+  removable_media_browsing:
+    AbsolutePath|contains|any:
+      - 'E:\\'
+      - 'F:\\'
+      - 'G:\\'
+      - 'H:\\'
+      - 'USB'
+  condition: system_folder_browsing or sensitive_data_dirs or network_share_browsing or removable_media_browsing
+falsepositives:
+  - System administrators navigating system directories during maintenance
+  - Backup operators accessing backup folders
+  - Users browsing USB drives for legitimate file transfers
+level: medium
+fields:
+  - AbsolutePath
+  - CreatedOn
+  - ModifiedOn
+  - AccessedOn
+  - SlotModifiedDate
+  - BagPath
+  - User
+custom:
+  mitre_tactic: "TA0007 – Discovery"
+  mitre_technique: "T1083 – File and Directory Discovery"
+  chainsaw_compatible: false
+  investigation_note: |
+    ShellBags persist in NTUSER.DAT and UsrClass.dat registry hives. They survive
+    folder deletion — proving the folder existed and was browsed even if it was later
+    removed. SlotModifiedDate indicates when the view settings were last updated,
+    serving as a proxy for when the folder was accessed. Network paths in ShellBags
+    reveal lateral movement target enumeration.

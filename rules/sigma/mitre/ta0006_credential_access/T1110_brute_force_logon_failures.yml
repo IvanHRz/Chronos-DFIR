@@ -1,0 +1,71 @@
+title: Brute Force – Multiple Authentication Failures from Single Source
+id: d0e1f2a3-b4c5-6789-defa-890123456789
+status: stable
+description: |
+  Detects brute force authentication attempts by correlating multiple logon
+  failure events (4625) from a single source IP or user account in a short time.
+  Also detects account lockout (4740) which often follows brute force attacks.
+  Covers Kerberos pre-authentication failures (4771) for Kerberoasting or spraying.
+references:
+  - https://attack.mitre.org/techniques/T1110/
+  - https://github.com/WithSecureLabs/chainsaw
+  - https://github.com/sbousseaden/EVTX-ATTACK-SAMPLES
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/07
+tags:
+  - attack.credential_access
+  - attack.t1110
+  - chainsaw
+logsource:
+  product: windows
+  service: security
+detection:
+  logon_failure:
+    EventID: '4625'
+  account_lockout:
+    EventID: '4740'
+  kerberos_preauthfail:
+    EventID: '4771'
+    FailureCode:
+      - '0x18'   # Wrong password
+      - '0x6'    # Username does not exist
+      - '0x24'   # Pre-auth type not supported
+  ntlm_failure:
+    EventID: '4776'
+    Status: '0xC000006A'  # Wrong password
+  condition: logon_failure or account_lockout or kerberos_preauthfail or ntlm_failure
+  timeframe: 5m
+  correlation:
+    type: event_count
+    rules: logon_failure
+    group-by:
+      - IpAddress
+    timespan: 5m
+    condition:
+      gte: 10
+falsepositives:
+  - Misconfigured services with outdated credentials
+  - Users forgetting their password
+  - Password manager sync issues
+level: medium
+fields:
+  - EventID
+  - IpAddress
+  - TargetUserName
+  - SubjectUserName
+  - LogonType
+  - FailureReason
+  - Status
+  - SubStatus
+custom:
+  mitre_tactic: "TA0006 – Credential Access"
+  mitre_technique: "T1110 – Brute Force"
+  windows_event_ids: ["4625", "4740", "4771", "4776"]
+  chainsaw_compatible: true
+  logon_failure_codes:
+    "0xC000006D": "Logon failure: Unknown user or bad password"
+    "0xC000006A": "Logon failure: Bad current password"
+    "0xC0000064": "User name does not exist"
+    "0xC000006F": "Outside allowed logon hours"
+    "0xC0000070": "Workstation restriction"
+    "0xC000015B": "Logon type not granted"

@@ -1,0 +1,71 @@
+title: Print Processor Persistence – Registry Modification to Print Monitors/Providers
+id: c9d0e1f2-a7b8-4345-f235-467890123456
+status: stable
+description: |
+  Detects modification of Print Monitor and Print Provider registry keys for persistence.
+  Adversaries can register malicious DLLs as print monitors or providers that load into the
+  spoolsv.exe process at SYSTEM privilege on every boot. This is a stealthy persistence
+  mechanism that survives reboots and runs with the highest privileges.
+references:
+  - https://attack.mitre.org/techniques/T1547/012/
+  - https://www.welivesecurity.com/2020/05/21/no-game-over-winnti-group/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.persistence
+  - attack.privilege_escalation
+  - attack.t1547.012
+logsource:
+  product: windows
+detection:
+  reg_print_monitor:
+    CommandLine|contains|any:
+      - 'HKLM\SYSTEM\CurrentControlSet\Control\Print\Monitors'
+      - 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Print\\Monitors'
+      - 'Print\Monitors'
+  reg_print_provider:
+    CommandLine|contains|any:
+      - 'HKLM\SYSTEM\CurrentControlSet\Control\Print\Providers'
+      - 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Print\\Providers'
+      - 'Print\Providers'
+  reg_modify_tools:
+    Image|endswith|any:
+      - '\reg.exe'
+      - '\regedit.exe'
+      - '\powershell.exe'
+      - '\pwsh.exe'
+  sysmon_registry_print:
+    EventID: '13'
+    TargetObject|contains|any:
+      - '\Control\Print\Monitors\'
+      - '\Control\Print\Providers\'
+  spoolsv_unusual_child:
+    ParentImage|endswith: '\spoolsv.exe'
+    Image|endswith|any:
+      - '\cmd.exe'
+      - '\powershell.exe'
+      - '\rundll32.exe'
+      - '\regsvr32.exe'
+  condition: (reg_print_monitor or reg_print_provider) or sysmon_registry_print or spoolsv_unusual_child
+falsepositives:
+  - Legitimate printer driver installations
+  - Print management software deploying new monitors
+  - IT administrators configuring print infrastructure
+level: high
+fields:
+  - Image
+  - CommandLine
+  - ParentImage
+  - TargetObject
+  - User
+  - EventID
+custom:
+  mitre_tactic: "TA0003 – Persistence / TA0004 – Privilege Escalation"
+  mitre_technique: "T1547.012 – Print Processors"
+  windows_event_ids: ["4688", "1", "13", "7045"]
+  investigation_note: |
+    Malicious print monitors run as SYSTEM inside spoolsv.exe — extremely high privilege.
+    Check the DLL path registered in the Print\Monitors key — legitimate DLLs are in System32.
+    Any DLL loaded from Temp, AppData, or ProgramData is highly suspicious.
+    Look for spoolsv.exe spawning cmd.exe or powershell.exe as a post-exploitation indicator.
+    Cross-reference with Sysmon EventID 7 (ImageLoaded) for spoolsv.exe loading unknown DLLs.

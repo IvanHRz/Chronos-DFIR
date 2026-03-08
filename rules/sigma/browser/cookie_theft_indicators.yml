@@ -1,0 +1,79 @@
+title: Browser Cookie and Session Theft – Credential Harvesting Indicators
+id: e9f0a1b2-2929-4e3f-f4a5-b6c7d8e9f0a1
+status: stable
+description: |
+  Detects indicators of browser cookie and session token theft, a primary technique
+  for bypassing multi-factor authentication. Covers direct access to browser cookie
+  databases, cookie decryption tool execution, Local State file access (Chrome
+  encryption key), and browser profile copying.
+references:
+  - https://attack.mitre.org/techniques/T1539/
+  - https://attack.mitre.org/techniques/T1555/003/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.credential_access
+  - attack.t1539
+  - attack.t1555.003
+  - artifact.browser
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  cookie_db_access:
+    CommandLine|contains|any:
+      - 'Cookies'
+      - 'cookies.sqlite'
+      - 'Login Data'
+      - 'Web Data'
+      - 'Local State'
+    CommandLine|contains|any:
+      - 'copy'
+      - 'xcopy'
+      - 'robocopy'
+      - 'type'
+      - 'sqlite3'
+      - 'python'
+  chrome_profile_paths:
+    CommandLine|contains|any:
+      - 'Google\\Chrome\\User Data'
+      - 'Microsoft\\Edge\\User Data'
+      - 'BraveSoftware\\Brave-Browser\\User Data'
+      - 'Mozilla\\Firefox\\Profiles'
+  dpapi_decryption:
+    CommandLine|contains|any:
+      - 'CryptUnprotectData'
+      - 'DPAPI'
+      - 'masterkey'
+      - 'mimikatz.*dpapi'
+      - 'SharpDPAPI'
+      - 'SharpChrome'
+  browser_debug_port:
+    CommandLine|contains|any:
+      - '--remote-debugging-port'
+      - '--remote-allow-origins'
+      - '--user-data-dir'
+      - '--headless'
+  condition: cookie_db_access or chrome_profile_paths or dpapi_decryption or browser_debug_port
+falsepositives:
+  - Browser sync mechanisms accessing profile data
+  - Legitimate browser automation tools (Selenium, Playwright)
+  - Browser backup utilities
+level: high
+fields:
+  - Image
+  - CommandLine
+  - User
+  - ParentImage
+  - Computer
+  - Timestamp
+custom:
+  mitre_tactic: "TA0006 – Credential Access"
+  mitre_technique: "T1539 – Steal Web Session Cookie"
+  chainsaw_compatible: true
+  investigation_note: |
+    Chrome stores the DPAPI encryption key in "Local State" JSON file. Access to
+    this file followed by access to "Cookies" or "Login Data" databases indicates
+    credential theft. The --remote-debugging-port flag enables cookie extraction
+    from a live browser session without touching disk. Check for SharpChrome,
+    CookieStealer, or similar tools in Prefetch/AmCache.

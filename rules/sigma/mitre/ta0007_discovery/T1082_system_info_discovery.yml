@@ -1,0 +1,99 @@
+title: System Information Discovery – Reconnaissance via Built-in Tools
+id: a7b8c9d0-e1f2-3456-abcd-567890123456
+status: stable
+description: |
+  Detects adversary reconnaissance of the local system using built-in Windows and
+  macOS utilities. Attackers run commands like systeminfo, hostname, ipconfig,
+  net, whoami, and wmic to enumerate OS version, domain membership, installed software,
+  network configuration, and running processes before pivoting or escalating privileges.
+  Multiple discovery commands from the same parent process is a strong behavioral signal.
+references:
+  - https://attack.mitre.org/techniques/T1082/
+  - https://github.com/WithSecureLabs/chainsaw
+  - https://github.com/redcanaryco/atomic-red-team/tree/master/atomics/T1082
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/07
+tags:
+  - attack.discovery
+  - attack.t1082
+  - chainsaw
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  systeminfo_enum:
+    Image|endswith: '\systeminfo.exe'
+  hostname_enum:
+    Image|endswith: '\hostname.exe'
+  ipconfig_enum:
+    Image|endswith: '\ipconfig.exe'
+    CommandLine|contains|any:
+      - '/all'
+      - '/displaydns'
+  net_enum:
+    Image|endswith|any:
+      - '\net.exe'
+      - '\net1.exe'
+    CommandLine|contains|any:
+      - 'net user'
+      - 'net group'
+      - 'net localgroup'
+      - 'net share'
+      - 'net view'
+      - 'net accounts'
+  whoami_priv:
+    Image|endswith: '\whoami.exe'
+    CommandLine|contains|any:
+      - '/all'
+      - '/priv'
+      - '/groups'
+  wmic_os_query:
+    Image|endswith: '\wmic.exe'
+    CommandLine|contains|any:
+      - 'os get'
+      - 'computersystem get'
+      - 'cpu get'
+      - 'bios get'
+      - 'product get'
+      - 'qfe list'
+  nltest_domain:
+    Image|endswith: '\nltest.exe'
+    CommandLine|contains|any:
+      - '/domain_trusts'
+      - '/dclist'
+      - '/dsgetdc'
+  arp_route_enum:
+    Image|endswith|any:
+      - '\arp.exe'
+      - '\route.exe'
+      - '\netstat.exe'
+    CommandLine|contains|any:
+      - '-a'
+      - 'print'
+  reg_enum:
+    Image|endswith: '\reg.exe'
+    CommandLine|contains|any:
+      - 'query HKLM\SOFTWARE\Microsoft\Windows NT'
+      - 'query HKLM\SYSTEM\CurrentControlSet'
+  condition: systeminfo_enum or hostname_enum or ipconfig_enum or net_enum or whoami_priv or wmic_os_query or nltest_domain or arp_route_enum or reg_enum
+falsepositives:
+  - IT administrators performing routine system inventory or auditing
+  - RMM tools (SolarWinds, ConnectWise) gathering system metrics
+  - Automated vulnerability scanners or compliance audit scripts
+level: low
+fields:
+  - Image
+  - CommandLine
+  - ParentImage
+  - User
+  - Computer
+custom:
+  mitre_tactic: "TA0007 – Discovery"
+  mitre_technique: "T1082 – System Information Discovery"
+  windows_event_ids: ["4688", "1"]
+  chainsaw_compatible: true
+  investigation_note: |
+    Single commands have high false-positive rates. Triage by correlating multiple
+    discovery commands from the same ParentImage within a short timeframe (5–10 min).
+    A chain of systeminfo → whoami /all → nltest /domain_trusts → net group is
+    a reliable indicator of hands-on-keyboard reconnaissance.

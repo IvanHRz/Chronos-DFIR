@@ -1,0 +1,85 @@
+title: WordWheelQuery – Suspicious Explorer Search Terms
+id: d0e1f2a3-1010-4d4e-e5f6-a7b8c9d0e1f2
+status: stable
+description: |
+  Detects suspicious search terms recorded in the Windows WordWheelQuery registry key,
+  which stores every search term typed into the Explorer search bar. Attackers
+  searching for credential files, sensitive documents, or specific data types leave
+  traces in this artifact. Also covers TypedPaths for Explorer address bar navigation.
+references:
+  - https://attack.mitre.org/techniques/T1083/
+  - https://attack.mitre.org/techniques/T1119/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.discovery
+  - attack.t1083
+  - attack.collection
+  - attack.t1119
+  - artifact.wordwheelquery
+logsource:
+  category: wordwheelquery
+  product: windows
+detection:
+  credential_search:
+    SearchTerm|contains|any:
+      - 'password'
+      - 'passwd'
+      - 'credential'
+      - 'secret'
+      - 'private key'
+      - '.kdbx'
+      - '.pfx'
+      - '.pem'
+      - '.ppk'
+      - 'id_rsa'
+      - 'wallet'
+      - 'seed phrase'
+      - 'recovery key'
+  financial_search:
+    SearchTerm|contains|any:
+      - 'bank'
+      - 'invoice'
+      - 'payment'
+      - 'credit card'
+      - 'ssn'
+      - 'social security'
+      - 'tax return'
+      - 'W-2'
+      - '1099'
+  data_staging_search:
+    SearchTerm|contains|any:
+      - '.zip'
+      - '.rar'
+      - '.7z'
+      - '.tar'
+      - '.csv'
+      - '.xlsx'
+      - '.sql'
+      - '.bak'
+      - '.mdb'
+      - 'database'
+      - 'backup'
+      - 'confidential'
+      - 'classified'
+      - 'restricted'
+  condition: credential_search or financial_search or data_staging_search
+falsepositives:
+  - Users searching for their own password manager database
+  - Finance department searching for legitimate financial documents
+  - Database administrators looking for backup files
+level: medium
+fields:
+  - SearchTerm
+  - MRUPosition
+  - LastWriteTime
+  - User
+custom:
+  mitre_tactic: "TA0009 – Collection"
+  mitre_technique: "T1119 – Automated Collection"
+  chainsaw_compatible: false
+  investigation_note: |
+    WordWheelQuery entries are ordered by MRU position (0 = most recent). The
+    sequence of search terms can reveal attacker objectives — e.g., searching
+    for "password" then ".kdbx" then "backup" suggests targeted credential theft.
+    Correlate with OpenSaveMRU to see if matching files were subsequently opened.

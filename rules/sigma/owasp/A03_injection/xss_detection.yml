@@ -1,0 +1,64 @@
+title: XSS Detection — OWASP A03:2021 Cross-Site Scripting
+id: a7b8c9d0-e1f2-3456-abcd-567890123456
+status: stable
+description: |
+  Detects Cross-Site Scripting (XSS) attempts in web application logs.
+  Covers reflected, stored, and DOM-based XSS patterns.
+  OWASP A03:2021 – Injection / MITRE T1059.007.
+references:
+  - https://owasp.org/Top10/A03_2021-Injection/
+  - https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/03
+tags:
+  - owasp.a03_2021
+  - attack.execution
+  - attack.t1059.007
+logsource:
+  category: webserver
+  product: any
+detection:
+  xss_script_tag:
+    decoded_uri|contains|any:
+      - "<script"
+      - "<SCRIPT"
+      - "%3Cscript"
+      - "%3CSCRIPT"
+  xss_event_handlers:
+    decoded_uri|contains|any:
+      - "onerror="
+      - "onload="
+      - "onclick="
+      - "onmouseover="
+      - "onfocus="
+      - "onkeypress="
+  xss_javascript_proto:
+    decoded_uri|contains|any:
+      - "javascript:"
+      - "vbscript:"
+      - "data:text/html"
+  xss_payload_indicators:
+    decoded_uri|contains|any:
+      - "alert("
+      - "confirm("
+      - "prompt("
+      - "document.cookie"
+      - "document.write("
+      - "window.location"
+      - "eval("
+  condition: xss_script_tag or xss_event_handlers or xss_javascript_proto or xss_payload_indicators
+falsepositives:
+  - Security training platforms with XSS labs
+  - Developers submitting code samples via forms
+level: high
+fields:
+  - externalIp
+  - uri
+  - decoded_uri
+  - status_code
+  - referer
+custom:
+  owasp_category: "A03:2021 – Injection (XSS)"
+  attack_type: "Cross-Site Scripting (XSS)"
+  mitre_tactic: "TA0002 – Execution"
+  mitre_technique: "T1059.007 – JavaScript"

@@ -1,0 +1,98 @@
+title: Pass-the-Hash / NTLM Lateral Movement via Windows Event Logs
+id: 9d4c7e2b-f158-4a83-bc34-ef9012345678
+status: stable
+description: |
+  Detects Pass-the-Hash (PtH) attacks using Windows Security Event Logs (EVTX).
+  The technique abuses NTLM authentication by injecting a captured password hash
+  to authenticate without knowing the plaintext password.
+  Key indicators: EventID 4624 (Logon Type 3 or 9) with NtLmSsp or Negotiate
+  package, NullDomain or anomalous SubjectDomainName, combined with EventID 4648
+  (Explicit Credential Logon) from non-interactive sessions.
+  Maps to MITRE T1550.002 — Use Alternate Authentication Material: Pass the Hash.
+references:
+  - https://attack.mitre.org/techniques/T1550/002/
+  - https://www.ultimatewindowssecurity.com/securitylog/encyclopedia/event.aspx?eventid=4624
+  - https://www.crowdstrike.com/blog/credential-theft-attacks/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/07
+tags:
+  - attack.lateral_movement
+  - attack.t1550.002
+  - attack.credential_access
+  - attack.t1557
+  - platform.windows
+logsource:
+  category: authentication
+  product: windows
+  # Chronos ingesta: EVTX procesado
+  # Campos esperados: EventID, Level, Computer, Time,
+  #                   SubjectUserName, SubjectDomainName, LogonType,
+  #                   AuthenticationPackageName, WorkstationName, IpAddress
+detection:
+  # Patrón 1: Logon de red anónimo con NtLmSsp (PtH clásico)
+  pth_network_logon:
+    EventID: "4624"
+    LogonType|contains|any:
+      - "3"
+      - "9"
+    AuthenticationPackageName|contains|any:
+      - "NTLM"
+      - "NtLmSsp"
+    SubjectUserName|contains: "ANONYMOUS LOGON"
+
+  # Patrón 2: Explicit Credential Logon desde proceso no interactivo
+  explicit_cred_logon:
+    EventID: "4648"
+    SubjectUserName|contains|any:
+      - "SYSTEM"
+      - "LOCAL SERVICE"
+      - "NETWORK SERVICE"
+
+  # Patrón 3: Admin share access tras autenticación NTLM sospechosa
+  admin_share_access:
+    EventID: "5140"
+    ShareName|contains|any:
+      - "\\\\*\\ADMIN$"
+      - "\\\\*\\C$"
+      - "\\\\*\\IPC$"
+
+  # Patrón 4: Null/Anomalous Domain con logon de tipo 3
+  null_domain_logon:
+    EventID: "4624"
+    LogonType: "3"
+    SubjectDomainName|contains|any:
+      - "-"
+      - "WORKGROUP"
+      - ""
+    AuthenticationPackageName|contains: "NTLM"
+
+  condition: pth_network_logon or explicit_cred_logon or (null_domain_logon and admin_share_access)
+falsepositives:
+  - Legitimate network shares access in workgroup environments
+  - Some backup agents that use NTLM for network authentication
+  - Legacy applications without Kerberos support
+  - Pentest/Red Team activity (authorized)
+level: high
+fields:
+  - Time
+  - EventID
+  - Computer
+  - SubjectUserName
+  - SubjectDomainName
+  - LogonType
+  - AuthenticationPackageName
+  - WorkstationName
+  - IpAddress
+  - ShareName
+custom:
+  mitre_tactic: "TA0008 — Lateral Movement"
+  mitre_technique: "T1550.002 — Pass the Hash"
+  chronos_artifact: "Windows EVTX (Security.evtx)"
+  sigma_chain:
+    - T1558_003_kerberoasting.yml
+    - T1543_003_windows_service.yml
+  investigation_note: |
+    Correlate IpAddress con otros eventos de la misma IP (búsqueda global en Chronos).
+    Buscar EventID 4776 (NTLM Validation) antes de este evento en el mismo Computer.
+    Pivotear en el host origen para buscar herramientas tipo mimikatz, sekurlsa::pth.
+    Un patrón PtH típico: 4624 (tipo 3, NTLM) → 5140 (ADMIN$) → 4688 (proceso remoto).

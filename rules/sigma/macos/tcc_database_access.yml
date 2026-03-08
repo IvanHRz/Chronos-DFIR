@@ -1,0 +1,75 @@
+title: macOS TCC Database – Unauthorized Access and Manipulation
+id: e3f4a5b6-2323-4e7f-f8a9-b0c1d2e3f4a5
+status: stable
+description: |
+  Detects access to or manipulation of the macOS Transparency, Consent, and Control
+  (TCC) database, which governs application permissions for camera, microphone,
+  screen recording, accessibility, and full disk access. Attackers modify TCC.db
+  to grant themselves permissions without user consent or to disable security controls.
+references:
+  - https://attack.mitre.org/techniques/T1562/001/
+  - https://objective-see.org/blog/blog_0x6C.html
+  - https://www.rainforestqa.com/blog/macos-tcc-db-deep-dive
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.defense_evasion
+  - attack.t1562.001
+  - attack.privilege_escalation
+  - platform.macos
+logsource:
+  category: process_creation
+  product: macos
+detection:
+  tcc_db_direct_access:
+    CommandLine|contains|any:
+      - 'TCC.db'
+      - 'TCC/TCC.db'
+      - '/Library/Application Support/com.apple.TCC'
+  tcc_sqlite_manipulation:
+    Image|endswith|any:
+      - '/sqlite3'
+      - '/python'
+      - '/python3'
+    CommandLine|contains: 'TCC'
+  tcc_reset:
+    CommandLine|contains|any:
+      - 'tccutil reset'
+      - 'tccutil'
+  tcc_permission_grant:
+    CommandLine|contains|any:
+      - 'INSERT INTO access'
+      - 'UPDATE access SET'
+      - 'kTCCServiceAccessibility'
+      - 'kTCCServiceScreenCapture'
+      - 'kTCCServiceMicrophone'
+      - 'kTCCServiceCamera'
+      - 'kTCCServiceSystemPolicyAllFiles'
+  sip_bypass_for_tcc:
+    CommandLine|contains|any:
+      - 'csrutil disable'
+      - 'csrutil authenticated-root disable'
+      - 'mount -uw /'
+  condition: tcc_db_direct_access or tcc_sqlite_manipulation or tcc_reset or tcc_permission_grant or sip_bypass_for_tcc
+falsepositives:
+  - MDM solutions managing TCC permissions
+  - Legitimate tccutil reset during app troubleshooting
+  - Security researchers analyzing TCC database
+level: critical
+fields:
+  - Image
+  - CommandLine
+  - User
+  - PID
+  - ParentImage
+  - Timestamp
+custom:
+  mitre_tactic: "TA0005 – Defense Evasion"
+  mitre_technique: "T1562.001 – Impair Defenses: Disable or Modify Tools"
+  chainsaw_compatible: false
+  investigation_note: |
+    TCC.db locations: ~/Library/Application Support/com.apple.TCC/TCC.db (user)
+    and /Library/Application Support/com.apple.TCC/TCC.db (system). Direct sqlite3
+    manipulation bypasses the consent UI entirely. SIP must be disabled to modify
+    the system TCC.db — check csrutil status. Correlate with Gatekeeper and
+    XProtect events for a complete picture of security control tampering.

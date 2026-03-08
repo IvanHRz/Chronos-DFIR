@@ -1,0 +1,82 @@
+title: Linux Sudo/Su – Privilege Escalation Indicators
+id: f8a9b0c1-1818-4f2a-a3b4-c5d6e7f8a9b0
+status: stable
+description: |
+  Detects suspicious sudo and su usage patterns on Linux systems that indicate
+  privilege escalation attempts. Covers sudo failures, sudoers file modification,
+  su to root from unexpected users, sudo command injection, and exploitation of
+  sudo misconfigurations (GTFOBins patterns).
+references:
+  - https://attack.mitre.org/techniques/T1548/003/
+  - https://gtfobins.github.io/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.privilege_escalation
+  - attack.t1548.003
+  - platform.linux
+logsource:
+  category: authentication
+  product: linux
+detection:
+  sudo_failure:
+    Message|contains|any:
+      - 'sudo: 3 incorrect password attempts'
+      - 'user NOT in sudoers'
+      - 'NOT allowed to run sudo'
+      - 'sudo: unable to resolve host'
+  sudoers_modification:
+    Message|contains|any:
+      - 'visudo'
+      - '/etc/sudoers'
+      - 'sudoers.d'
+      - 'NOPASSWD'
+  su_to_root:
+    Message|contains|any:
+      - 'su: (to root)'
+      - 'su:session): session opened for user root'
+      - 'Successful su for root'
+  sudo_gtfobins:
+    CommandLine|contains|any:
+      - 'sudo vi'
+      - 'sudo vim'
+      - 'sudo nano'
+      - 'sudo less'
+      - 'sudo more'
+      - 'sudo find'
+      - 'sudo awk'
+      - 'sudo perl'
+      - 'sudo python'
+      - 'sudo ruby'
+      - 'sudo env'
+      - 'sudo ftp'
+      - 'sudo nmap --interactive'
+      - 'sudo docker run'
+  sudo_command_injection:
+    CommandLine|contains|any:
+      - 'sudo -u#-1'
+      - 'sudo -u#4294967295'
+      - 'sudo EDITOR='
+      - 'sudoedit'
+  condition: sudo_failure or sudoers_modification or su_to_root or sudo_gtfobins or sudo_command_injection
+falsepositives:
+  - Legitimate administrative su/sudo usage
+  - System administrators editing sudoers for valid purposes
+  - Developers using sudo for local development tasks
+level: high
+fields:
+  - Message
+  - CommandLine
+  - User
+  - SourceIP
+  - PID
+  - Hostname
+custom:
+  mitre_tactic: "TA0004 – Privilege Escalation"
+  mitre_technique: "T1548.003 – Abuse Elevation Control Mechanism: Sudo and Sudo Caching"
+  chainsaw_compatible: false
+  investigation_note: |
+    Check /etc/sudoers and /etc/sudoers.d/ for NOPASSWD entries or wildcard commands.
+    GTFOBins-style escalation (sudo vi -> :!/bin/bash) leaves traces in auth.log
+    showing the initial sudo command but not the shell escape. Correlate with bash
+    history and process trees to identify full escalation chains.

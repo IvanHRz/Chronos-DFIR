@@ -1,0 +1,69 @@
+title: Server-Side Request Forgery (SSRF) — OWASP A10:2021
+id: c9d0e1f2-a3b4-5678-cdef-789012345678
+status: stable
+description: |
+  Detects SSRF attempts targeting internal infrastructure, cloud metadata
+  endpoints, and internal services via web applications.
+  OWASP A10:2021 – SSRF / MITRE T1590.
+references:
+  - https://owasp.org/Top10/A10_2021-Server-Side_Request_Forgery_%28SSRF%29/
+  - https://attack.mitre.org/techniques/T1590/
+  - https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/03
+tags:
+  - owasp.a10_2021
+  - attack.collection
+  - attack.t1590
+logsource:
+  category: webserver
+  product: any
+detection:
+  ssrf_loopback:
+    decoded_uri|contains|any:
+      - "http://127.0.0.1"
+      - "http://localhost"
+      - "http://[::1]"
+      - "http://0.0.0.0"
+      - "http://0177.0.0.1"
+  ssrf_cloud_metadata:
+    decoded_uri|contains|any:
+      - "169.254.169.254"          # AWS/Azure/GCP metadata
+      - "metadata.google.internal"  # GCP
+      - "metadata.azure.com"        # Azure
+      - "169.254.170.2"            # AWS ECS metadata
+      - "100.100.100.200"          # Alibaba Cloud metadata
+  ssrf_internal_ranges:
+    decoded_uri|re: 'http://(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2[0-9]|3[0-1])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})'
+  ssrf_file_protocol:
+    decoded_uri|contains|any:
+      - "file:///etc/passwd"
+      - "file:///etc/shadow"
+      - "file:///proc/"
+      - "file:///"
+  ssrf_parameters:
+    decoded_uri|contains|any:
+      - "?url=http"
+      - "?redirect=http"
+      - "?link=http"
+      - "?src=http"
+      - "?dest=http"
+      - "?target=http"
+      - "?load=http"
+  condition: ssrf_loopback or ssrf_cloud_metadata or ssrf_internal_ranges or ssrf_file_protocol or ssrf_parameters
+falsepositives:
+  - Web crawlers indexing internal links
+  - Debugging tools in development environments
+level: critical
+fields:
+  - externalIp
+  - uri
+  - decoded_uri
+  - status_code
+  - bytes_out
+custom:
+  owasp_category: "A10:2021 – Server-Side Request Forgery (SSRF)"
+  attack_type: "SSRF"
+  mitre_tactic: "TA0009 – Collection"
+  mitre_technique: "T1590 – Gather Victim Network Information"
+  critical_indicator: "Cloud metadata endpoint access (169.254.169.254) = Cloud credential theft"

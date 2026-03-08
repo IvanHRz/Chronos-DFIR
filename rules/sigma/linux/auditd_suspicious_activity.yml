@@ -1,0 +1,86 @@
+title: Linux Auditd – Suspicious System Call and File Access Patterns
+id: c1d2e3f4-2121-4c5d-d6e7-f8a9b0c1d2e3
+status: stable
+description: |
+  Detects suspicious activity captured by the Linux audit daemon (auditd), including
+  unauthorized file access to sensitive paths, suspicious system calls (ptrace,
+  memfd_create, execveat), privilege changes, and kernel module loading. Auditd
+  provides the most detailed system-level visibility on Linux.
+references:
+  - https://attack.mitre.org/techniques/T1055/008/
+  - https://attack.mitre.org/techniques/T1547/006/
+  - https://man7.org/linux/man-pages/man8/auditd.8.html
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.privilege_escalation
+  - attack.t1055.008
+  - attack.persistence
+  - attack.t1547.006
+  - platform.linux
+logsource:
+  category: audit
+  product: linux
+detection:
+  sensitive_file_access:
+    key|contains|any:
+      - 'shadow_access'
+      - 'passwd_modification'
+      - 'sudoers_access'
+    FileName|contains|any:
+      - '/etc/shadow'
+      - '/etc/passwd'
+      - '/etc/sudoers'
+      - '/etc/gshadow'
+      - '/etc/security/'
+  ptrace_injection:
+    Syscall|contains|any:
+      - 'ptrace'
+      - 'process_vm_readv'
+      - 'process_vm_writev'
+  fileless_execution:
+    Syscall|contains|any:
+      - 'memfd_create'
+      - 'execveat'
+  kernel_module_load:
+    Syscall|contains|any:
+      - 'init_module'
+      - 'finit_module'
+      - 'delete_module'
+    CommandLine|contains|any:
+      - 'insmod'
+      - 'modprobe'
+      - 'rmmod'
+  privilege_change:
+    Type|contains|any:
+      - 'ANOM_PROMISCUOUS'
+      - 'ANOM_ROOT_TRANS'
+      - 'USER_ROLE_CHANGE'
+      - 'MAC_POLICY_LOAD'
+      - 'SELINUX_ERR'
+  condition: sensitive_file_access or ptrace_injection or fileless_execution or kernel_module_load or privilege_change
+falsepositives:
+  - System administrators loading legitimate kernel modules
+  - Password management tools accessing shadow file
+  - Debugging tools using ptrace (strace, gdb)
+level: high
+fields:
+  - Syscall
+  - FileName
+  - Type
+  - key
+  - User
+  - PID
+  - PPID
+  - CommandLine
+  - Hostname
+custom:
+  mitre_tactic: "TA0004 – Privilege Escalation"
+  mitre_technique: "T1055.008 – Process Injection: Ptrace System Calls"
+  chainsaw_compatible: false
+  investigation_note: |
+    memfd_create + execveat is the classic Linux fileless execution pattern — the
+    payload never touches disk. ptrace-based injection (PTRACE_ATTACH + PTRACE_POKETEXT)
+    is used by tools like linux-inject. Kernel module loading (init_module) can
+    install rootkits. Check /var/log/audit/audit.log and correlate the audit session
+    ID (auid) across events to reconstruct the full attack chain.

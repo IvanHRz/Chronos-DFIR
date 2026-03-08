@@ -1,0 +1,64 @@
+title: Clear Command History – Destruction of Shell History and Audit Trails
+id: a7b8c9d0-e5f6-4123-d013-245678901234
+status: stable
+description: |
+  Detects attempts to clear or delete command history files to destroy evidence of executed
+  commands. Adversaries target PowerShell ConsoleHost_history.txt, PSReadLine history,
+  and bash_history to cover their tracks after completing objectives. This is a strong
+  indicator of hands-on-keyboard activity by a threat actor aware of forensic artifacts.
+references:
+  - https://attack.mitre.org/techniques/T1070/003/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.defense_evasion
+  - attack.t1070.003
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  clear_history_ps:
+    CommandLine|contains|any:
+      - 'Clear-History'
+      - 'Remove-Item (Get-PSReadlineOption).HistorySavePath'
+      - 'Set-PSReadlineOption -HistorySaveStyle SaveNothing'
+      - 'Remove-Item -Path *ConsoleHost_history.txt'
+  del_history_file:
+    CommandLine|contains|any:
+      - 'del *ConsoleHost_history.txt'
+      - 'del *PSReadLine*'
+      - 'erase *ConsoleHost_history.txt'
+      - 'Remove-Item *PSReadLine*'
+  bash_history_clear:
+    CommandLine|contains|any:
+      - 'rm -f ~/.bash_history'
+      - 'history -c'
+      - 'rm -f ~/.zsh_history'
+      - 'cat /dev/null > ~/.bash_history'
+      - 'truncate -s 0 ~/.bash_history'
+      - 'unset HISTFILE'
+  event_log_wevtutil:
+    CommandLine|contains|any:
+      - 'wevtutil cl PowerShell'
+      - 'wevtutil cl Microsoft-Windows-PowerShell'
+  condition: clear_history_ps or del_history_file or bash_history_clear or event_log_wevtutil
+falsepositives:
+  - Automated cleanup scripts in development environments
+  - Privacy-focused tools that clear history on logoff
+level: high
+fields:
+  - Image
+  - CommandLine
+  - ParentImage
+  - User
+  - EventID
+custom:
+  mitre_tactic: "TA0005 – Defense Evasion"
+  mitre_technique: "T1070.003 – Clear Command History"
+  windows_event_ids: ["4688", "1", "4104"]
+  investigation_note: |
+    Command history deletion is almost always malicious in an enterprise environment.
+    Check if PSReadLine history was backed up before deletion (forensic recovery possible).
+    Correlate with other T1070 sub-techniques (log clearing, timestomping).
+    The commands executed BEFORE history clearing are the real investigative targets.
+    Recover history from VSS snapshots if available.

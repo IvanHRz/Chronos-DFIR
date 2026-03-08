@@ -1,0 +1,76 @@
+title: OpenSaveMRU – Suspicious File Open/Save Paths
+id: c9d0e1f2-9009-4c3d-d4e5-f6a7b8c9d0e1
+status: stable
+description: |
+  Detects suspicious entries in the Windows OpenSaveMRU registry key, which tracks
+  files opened or saved via the common Open/Save dialog box. This artifact reveals
+  files an attacker downloaded, saved, or opened interactively — including malware
+  dropped to disk, exfiltration staging files, and credential database access.
+  Also covers TypedPaths (Explorer address bar entries) and WordWheelQuery (search terms).
+references:
+  - https://attack.mitre.org/techniques/T1083/
+  - https://www.sans.org/blog/opensavemru-forensics/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.discovery
+  - attack.t1083
+  - attack.collection
+  - artifact.mru
+logsource:
+  category: mru
+  product: windows
+detection:
+  suspicious_extensions:
+    ValueData|endswith|any:
+      - '.ps1'
+      - '.bat'
+      - '.cmd'
+      - '.vbs'
+      - '.hta'
+      - '.wsf'
+      - '.scr'
+      - '.dll'
+      - '.sys'
+      - '.iso'
+      - '.img'
+      - '.vhd'
+  credential_files:
+    ValueData|endswith|any:
+      - '.kdbx'
+      - '.key'
+      - '.pem'
+      - '.pfx'
+      - '.p12'
+      - '.ppk'
+      - '.rdg'
+      - '.rtsz'
+  suspicious_save_location:
+    ValueData|contains|any:
+      - '\Temp\'
+      - '\ProgramData\'
+      - '\AppData\Roaming\'
+      - '\\\\'
+      - 'C$'
+      - 'ADMIN$'
+  condition: suspicious_extensions or credential_files or suspicious_save_location
+falsepositives:
+  - Developers saving scripts through standard dialogs
+  - IT staff working with RDP connection files
+  - Network administrators saving files to network shares
+level: medium
+fields:
+  - ValueData
+  - Extension
+  - MRUPosition
+  - LastWriteTime
+  - User
+custom:
+  mitre_tactic: "TA0007 – Discovery"
+  mitre_technique: "T1083 – File and Directory Discovery"
+  chainsaw_compatible: false
+  investigation_note: |
+    OpenSaveMRU is organized by file extension in the registry. MRUPosition 0 is
+    the most recently accessed file. Correlate with Jump Lists and LNK files for
+    a complete picture of file interaction. The presence of .iso/.img files may
+    indicate ISO-based malware delivery (common since MS disabled Office macros).

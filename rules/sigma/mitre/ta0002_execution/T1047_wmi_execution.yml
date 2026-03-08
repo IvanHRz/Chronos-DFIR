@@ -1,0 +1,64 @@
+title: WMI Execution – Suspicious Remote or Local WMI Process Spawn
+id: e1f2a3b4-c5d6-7890-efab-901234567890
+status: stable
+description: |
+  Detects abuse of Windows Management Instrumentation (WMI) for code execution,
+  persistence, and lateral movement. WMI is a built-in Windows component frequently
+  used by attackers for fileless execution and to spawn processes remotely.
+  Covers both Sysmon WMI events (19/20/21) and process creation from WMI providers.
+references:
+  - https://attack.mitre.org/techniques/T1047/
+  - https://github.com/WithSecureLabs/chainsaw
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/07
+tags:
+  - attack.execution
+  - attack.t1047
+  - chainsaw
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  wmi_spawn_child:
+    ParentImage|endswith:
+      - '\WmiPrvSE.exe'
+      - '\scrcons.exe'
+    Image|endswith|any:
+      - '\powershell.exe'
+      - '\cmd.exe'
+      - '\wscript.exe'
+      - '\cscript.exe'
+      - '\mshta.exe'
+      - '\msiexec.exe'
+      - '\regsvr32.exe'
+  wmi_filter_subscription:
+    EventID: '19'  # Sysmon WMI filter registered
+  wmi_consumer_created:
+    EventID: '20'  # Sysmon WMI consumer created
+  wmi_consumer_binding:
+    EventID: '21'  # Sysmon WMI consumer to filter binding
+  wmic_remote_execute:
+    Image|endswith: '\wmic.exe'
+    CommandLine|contains|all:
+      - '/node:'
+      - 'process'
+      - 'call'
+      - 'create'
+  condition: wmi_spawn_child or wmi_filter_subscription or wmi_consumer_created or wmi_consumer_binding or wmic_remote_execute
+falsepositives:
+  - Legitimate system management and monitoring tools using WMI
+  - SCCM/Intune software deployment
+  - Antivirus products using WMI for event monitoring
+level: medium
+fields:
+  - Image
+  - CommandLine
+  - ParentImage
+  - ParentCommandLine
+  - User
+  - EventID
+custom:
+  mitre_tactic: "TA0002 – Execution"
+  mitre_technique: "T1047 – Windows Management Instrumentation"
+  windows_event_ids: ["1", "4688", "19", "20", "21"]
+  chainsaw_compatible: true

@@ -1,0 +1,95 @@
+title: Browser History – Suspicious URL Patterns and Attacker Activity
+id: d8e9f0a1-2828-4d2e-e3f4-a5b6c7d8e9f0
+status: stable
+description: |
+  Detects suspicious URLs in browser history that indicate attacker reconnaissance,
+  exploitation infrastructure, data exfiltration via web services, or access to
+  known malicious patterns. Covers file sharing services used for exfil, paste sites,
+  VPN/proxy services, cryptocurrency services, and exploit-related URLs.
+references:
+  - https://attack.mitre.org/techniques/T1071/001/
+  - https://attack.mitre.org/techniques/T1567/002/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.command_and_control
+  - attack.t1071.001
+  - attack.exfiltration
+  - attack.t1567.002
+  - artifact.browser
+logsource:
+  category: browser_history
+  product: windows
+detection:
+  file_sharing_exfil:
+    URL|contains|any:
+      - 'mega.nz'
+      - 'mega.co.nz'
+      - 'anonfiles.com'
+      - 'gofile.io'
+      - 'transfer.sh'
+      - 'file.io'
+      - 'sendspace.com'
+      - 'wetransfer.com'
+      - 'catbox.moe'
+      - 'temp.sh'
+  paste_sites:
+    URL|contains|any:
+      - 'pastebin.com'
+      - 'paste.ee'
+      - 'hastebin.com'
+      - 'ghostbin.com'
+      - 'privatebin'
+      - 'dpaste.org'
+      - 'justpaste.it'
+  anonymization_services:
+    URL|contains|any:
+      - 'torproject.org'
+      - '.onion'
+      - 'mullvad.net'
+      - 'protonvpn.com'
+      - 'nordvpn.com'
+      - 'hide.me'
+      - 'whoer.net'
+      - 'dnsleaktest.com'
+  hacking_resources:
+    URL|contains|any:
+      - 'exploit-db.com'
+      - 'shodan.io'
+      - 'censys.io'
+      - 'crt.sh'
+      - 'virustotal.com'
+      - 'hybrid-analysis.com'
+      - 'any.run'
+      - 'urlscan.io'
+  crypto_services:
+    URL|contains|any:
+      - 'blockchain.com'
+      - 'localbitcoins.com'
+      - 'binance.com'
+      - 'tornado.cash'
+      - 'wasabiwallet.io'
+  condition: file_sharing_exfil or paste_sites or anonymization_services or hacking_resources or crypto_services
+falsepositives:
+  - Security researchers using VirusTotal and analysis platforms
+  - Legitimate use of file sharing services
+  - Privacy-conscious users using VPN services
+level: medium
+fields:
+  - URL
+  - Title
+  - VisitTime
+  - VisitCount
+  - Browser
+  - Profile
+  - User
+custom:
+  mitre_tactic: "TA0011 – Command and Control"
+  mitre_technique: "T1071.001 – Application Layer Protocol: Web Protocols"
+  chainsaw_compatible: false
+  investigation_note: |
+    Browser history databases: Chrome (History), Firefox (places.sqlite), Edge
+    (History). Check VisitCount — a high count to paste/file-sharing sites suggests
+    repeated exfiltration. Correlate timestamps with file access artifacts (LNK,
+    OpenSaveMRU) to identify what was uploaded. Check Downloads table for files
+    received from C2 infrastructure.

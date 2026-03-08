@@ -1,0 +1,81 @@
+title: macOS Authorization Framework – Privilege Escalation and Abuse
+id: b6c7d8e9-2626-4b0c-c1d2-e3f4a5b6c7d8
+status: stable
+description: |
+  Detects abuse of the macOS Authorization Framework used for privilege escalation.
+  Covers AuthorizationExecuteWithPrivileges API usage (deprecated but still exploitable),
+  security tool manipulation (security authorizationdb), and suspicious authorization
+  right modifications. Also detects password prompt spoofing via osascript.
+references:
+  - https://attack.mitre.org/techniques/T1548/004/
+  - https://objective-see.org/blog/blog_0x3E.html
+  - https://developer.apple.com/documentation/security/authorization_services
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.privilege_escalation
+  - attack.t1548.004
+  - attack.credential_access
+  - platform.macos
+logsource:
+  category: process_creation
+  product: macos
+detection:
+  authorizationdb_modification:
+    CommandLine|contains|any:
+      - 'security authorizationdb write'
+      - 'security authorizationdb read'
+      - 'security authorizationdb remove'
+  auth_execute_with_privileges:
+    Message|contains|any:
+      - 'AuthorizationExecuteWithPrivileges'
+      - 'com.apple.authorization'
+    Message|contains|any:
+      - 'granted'
+      - 'executing'
+      - 'elevated'
+  osascript_password_prompt:
+    CommandLine|contains|any:
+      - 'osascript -e.*display dialog.*password'
+      - 'osascript -e.*hidden answer'
+      - 'osascript.*keystroke.*password'
+      - 'osascript.*System Preferences'
+  security_tool_abuse:
+    Image|endswith: '/security'
+    CommandLine|contains|any:
+      - 'unlock-keychain'
+      - 'set-keychain-settings'
+      - 'import'
+      - 'add-trusted-cert'
+      - 'dump-keychain'
+  sudo_bypass:
+    CommandLine|contains|any:
+      - 'sudo -S'
+      - 'echo.*| sudo'
+      - 'expect.*sudo'
+      - 'script -q /dev/null sudo'
+  condition: authorizationdb_modification or auth_execute_with_privileges or osascript_password_prompt or security_tool_abuse or sudo_bypass
+falsepositives:
+  - Application installers requesting admin privileges
+  - MDM profiles modifying authorization rights
+  - Legitimate Keychain management by IT departments
+level: high
+fields:
+  - Image
+  - CommandLine
+  - Message
+  - User
+  - PID
+  - ParentImage
+  - Timestamp
+custom:
+  mitre_tactic: "TA0004 – Privilege Escalation"
+  mitre_technique: "T1548.004 – Abuse Elevation Control Mechanism: Elevated Execution with Prompt"
+  chainsaw_compatible: false
+  investigation_note: |
+    osascript password prompts are a common social engineering technique — they
+    display a legitimate-looking dialog that captures the user's password.
+    AuthorizationExecuteWithPrivileges was deprecated in 10.7 but still works
+    and does not verify the binary being elevated. security unlock-keychain
+    followed by dump-keychain is a credential theft sequence. Correlate with
+    TCC events to see if Accessibility permissions were granted.

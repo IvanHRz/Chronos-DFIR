@@ -1,0 +1,108 @@
+title: Ransomware File Encryption – Mass File Modification and Ransom Note Drops
+id: e1f2a3b4-c5d6-7890-efab-901234567890
+status: stable
+description: |
+  Detects ransomware activity through indicators of mass file encryption, shadow copy
+  deletion (the most reliable pre-encryption signal), ransom note creation, and
+  use of known ransomware tooling. Covers Ryuk, LockBit, BlackCat/ALPHV, Conti,
+  REvil/Sodinokibi behavioral patterns. VSS deletion via vssadmin or wmic before
+  encryption is an extremely high-fidelity indicator of imminent ransomware execution.
+references:
+  - https://attack.mitre.org/techniques/T1486/
+  - https://github.com/WithSecureLabs/chainsaw
+  - https://www.cisa.gov/stopransomware
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/07
+tags:
+  - attack.impact
+  - attack.t1486
+  - chainsaw
+  - ransomware
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  vss_delete_vssadmin:
+    Image|endswith: '\vssadmin.exe'
+    CommandLine|contains|any:
+      - 'delete shadows'
+      - 'resize shadowstorage'
+  vss_delete_wmic:
+    Image|endswith: '\wmic.exe'
+    CommandLine|contains|any:
+      - 'shadowcopy delete'
+      - 'shadowcopy where'
+  vss_delete_powershell:
+    Image|endswith|any:
+      - '\powershell.exe'
+      - '\pwsh.exe'
+    CommandLine|contains|any:
+      - 'Get-WmiObject Win32_ShadowCopy'
+      - 'Win32_ShadowCopy).Delete()'
+      - 'vssadmin delete'
+  bcdedit_recovery_disable:
+    Image|endswith: '\bcdedit.exe'
+    CommandLine|contains|any:
+      - 'recoveryenabled no'
+      - 'bootstatuspolicy ignoreallfailures'
+      - 'safeboot'
+  wbadmin_delete:
+    Image|endswith: '\wbadmin.exe'
+    CommandLine|contains|any:
+      - 'delete catalog'
+      - 'delete systemstatebackup'
+  ransom_note_indicators:
+    CommandLine|contains|any:
+      - 'README'
+      - 'HOW_TO_DECRYPT'
+      - 'DECRYPT_INSTRUCTION'
+      - 'YOUR_FILES'
+      - 'RESTORE_FILES'
+      - '!!!IMPORTANT'
+      - 'LOCKED'
+  known_ransomware_names:
+    Image|endswith|any:
+      - '\lockbit.exe'
+      - '\blackcat.exe'
+      - '\alphv.exe'
+      - '\ryuk.exe'
+      - '\conti.exe'
+    CommandLine|contains|any:
+      - '--access-token'
+      - '-path'
+      - '--silent'
+  file_rename_mass:
+    EventID: '4663'
+    ObjectName|contains|any:
+      - '.encrypted'
+      - '.locked'
+      - '.ryuk'
+      - '.conti'
+      - '.lockbit'
+      - '.alphv'
+      - '.bcrypt'
+      - '.lck'
+      - '.enc'
+  condition: vss_delete_vssadmin or vss_delete_wmic or vss_delete_powershell or bcdedit_delete or wbadmin_delete or ransom_note_indicators or known_ransomware_names or file_rename_mass
+falsepositives:
+  - Authorized backup administrators removing old shadow copies as part of storage management
+  - Legitimate encryption software (VeraCrypt, BitLocker) — distinguish by volume vs file scope
+  - DR testing with ransomware simulation tools in isolated environments
+level: critical
+fields:
+  - Image
+  - CommandLine
+  - ParentImage
+  - User
+  - Computer
+  - ObjectName
+custom:
+  mitre_tactic: "TA0040 – Impact"
+  mitre_technique: "T1486 – Data Encrypted for Impact"
+  windows_event_ids: ["4663", "4688", "1", "7045"]
+  chainsaw_compatible: true
+  investigation_note: |
+    VSS deletion is the single strongest pre-ransomware indicator — treat as critical.
+    Correlate vssadmin/wmic shadowcopy delete with subsequent bulk file modification (4663).
+    Check service installations (7045) for ransomware dropper services.
+    Review network events for C2 communication and lateral movement preceding encryption.

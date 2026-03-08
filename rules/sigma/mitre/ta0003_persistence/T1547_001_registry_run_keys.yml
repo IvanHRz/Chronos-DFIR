@@ -1,0 +1,61 @@
+title: Persistence via Registry Run Keys / Startup Folder
+id: e5f6a7b8-c9d0-1234-efab-345678901234
+status: stable
+description: |
+  Detects persistence established through Windows Registry Run/RunOnce keys
+  or the Startup folder. Attackers commonly add entries to these locations
+  to survive reboots and maintain access to compromised systems.
+  Covers HKLM and HKCU variants for both standard Run and RunOnce keys.
+references:
+  - https://attack.mitre.org/techniques/T1547/001/
+  - https://github.com/WithSecureLabs/chainsaw
+  - https://github.com/sbousseaden/EVTX-ATTACK-SAMPLES
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/07
+tags:
+  - attack.persistence
+  - attack.t1547.001
+  - chainsaw
+logsource:
+  product: windows
+detection:
+  run_key_write:
+    EventID: '13'  # Sysmon RegistrySetValue
+    TargetObject|contains|any:
+      - '\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\'
+      - '\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce\'
+      - '\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run\'
+      - '\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\Userinit'
+      - '\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\Shell'
+      - '\SYSTEM\CurrentControlSet\Control\Session Manager\BootExecute'
+  startup_folder_create:
+    EventID: '11'  # Sysmon FileCreate
+    TargetFilename|contains|any:
+      - '\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\'
+      - '\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup\'
+    TargetFilename|endswith|any:
+      - '.exe'
+      - '.bat'
+      - '.vbs'
+      - '.ps1'
+      - '.cmd'
+      - '.lnk'
+      - '.dll'
+  condition: run_key_write or startup_folder_create
+falsepositives:
+  - Software installers creating legitimate Run key entries
+  - Antivirus products adding startup entries
+  - User-initiated shortcut creation in Startup folder
+level: medium
+fields:
+  - TargetObject
+  - Details
+  - TargetFilename
+  - Image
+  - User
+  - EventID
+custom:
+  mitre_tactic: "TA0003 – Persistence"
+  mitre_technique: "T1547.001 – Boot or Logon Autostart Execution: Registry Run Keys"
+  windows_event_ids: ["11", "12", "13", "14"]
+  chainsaw_compatible: true

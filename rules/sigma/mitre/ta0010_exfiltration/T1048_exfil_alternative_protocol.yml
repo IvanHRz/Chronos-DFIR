@@ -1,0 +1,99 @@
+title: Exfiltration Over Alternative Protocol – Non-Standard Data Transfer
+id: e1f2a3b4-c9d0-4567-1457-689012345678
+status: stable
+description: |
+  Detects data exfiltration via alternative protocols and tools including curl/wget uploads,
+  FTP transfers, SCP/SFTP, rclone cloud sync, mega-cmd, and bitsadmin uploads. Adversaries
+  use these methods to bypass traditional HTTP-based DLP controls and transfer stolen data
+  to attacker-controlled infrastructure.
+references:
+  - https://attack.mitre.org/techniques/T1048/
+  - https://attack.mitre.org/techniques/T1048/003/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.exfiltration
+  - attack.t1048
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  curl_upload:
+    Image|endswith: '\curl.exe'
+    CommandLine|contains|any:
+      - ' -T '
+      - ' --upload-file'
+      - ' -X POST'
+      - ' -X PUT'
+      - ' -d @'
+      - ' --data-binary @'
+      - 'transfer.sh'
+      - 'file.io'
+      - 'temp.sh'
+  wget_upload:
+    Image|endswith: '\wget.exe'
+    CommandLine|contains|any:
+      - '--post-file'
+      - '--method=PUT'
+  ftp_transfer:
+    Image|endswith|any:
+      - '\ftp.exe'
+      - '\sftp.exe'
+    CommandLine|contains|any:
+      - 'put '
+      - 'mput '
+      - 'send '
+  scp_transfer:
+    Image|endswith: '\scp.exe'
+    CommandLine|contains: ' -r '
+  rclone_sync:
+    Image|endswith: '\rclone.exe'
+    CommandLine|contains|any:
+      - 'copy'
+      - 'sync'
+      - 'move'
+      - ':remote'
+  mega_cmd:
+    Image|endswith|any:
+      - '\mega-cmd.exe'
+      - '\megacmd.exe'
+      - '\MEGAcmdShell.exe'
+    CommandLine|contains|any:
+      - 'put'
+      - 'upload'
+      - 'sync'
+  bitsadmin_upload:
+    Image|endswith: '\bitsadmin.exe'
+    CommandLine|contains|any:
+      - '/upload'
+      - '/Upload'
+      - '/transfer.*upload'
+  powershell_upload:
+    CommandLine|contains|any:
+      - 'Invoke-WebRequest -Method Post'
+      - 'Invoke-RestMethod -Method Post'
+      - '[System.Net.WebClient]::new().UploadFile'
+      - 'UploadString('
+      - 'UploadData('
+  condition: curl_upload or wget_upload or ftp_transfer or scp_transfer or rclone_sync or mega_cmd or bitsadmin_upload or powershell_upload
+falsepositives:
+  - Legitimate file sharing via authorized cloud services
+  - DevOps pipelines uploading build artifacts
+  - Backup tools using SCP or rclone for offsite storage
+level: high
+fields:
+  - Image
+  - CommandLine
+  - ParentImage
+  - User
+  - EventID
+custom:
+  mitre_tactic: "TA0010 – Exfiltration"
+  mitre_technique: "T1048 – Exfiltration Over Alternative Protocol"
+  windows_event_ids: ["4688", "1"]
+  investigation_note: |
+    Correlate with T1560 (archiving) events in the preceding timeframe.
+    Check destination IPs/domains against threat intel feeds.
+    rclone is heavily used by ransomware groups (Conti, BlackCat) for double extortion.
+    Bitsadmin upload is a known LOLBin technique that bypasses many security controls.
+    Look for large file transfers in proxy/firewall logs around the same time.

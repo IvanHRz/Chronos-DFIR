@@ -1,0 +1,80 @@
+title: Recycle Bin Forensics – Deleted Attacker Artifacts
+id: e1f2a3b4-1111-4e5f-f6a7-b8c9d0e1f2a3
+status: stable
+description: |
+  Detects suspicious files found in the Windows Recycle Bin ($I/$R files) that indicate
+  attacker tool cleanup or evidence destruction. The $I file contains metadata (original
+  path, deletion timestamp, file size) while the $R file contains the actual content.
+  Attackers frequently delete their tools after use but forget to empty the Recycle Bin.
+references:
+  - https://attack.mitre.org/techniques/T1070/004/
+  - https://www.sans.org/blog/recycle-bin-forensics/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.defense_evasion
+  - attack.t1070.004
+  - artifact.recycle_bin
+logsource:
+  category: recycle_bin
+  product: windows
+detection:
+  deleted_tools:
+    OriginalPath|contains|any:
+      - 'mimikatz'
+      - 'psexec'
+      - 'procdump'
+      - 'lazagne'
+      - 'rubeus'
+      - 'sharphound'
+      - 'bloodhound'
+      - 'nmap'
+      - 'chisel'
+      - 'ligolo'
+      - 'nc.exe'
+      - 'ncat'
+      - 'plink'
+  deleted_scripts:
+    OriginalPath|endswith|any:
+      - '.ps1'
+      - '.bat'
+      - '.vbs'
+      - '.hta'
+      - '.wsf'
+    OriginalPath|contains|any:
+      - '\Temp\'
+      - '\ProgramData\'
+      - '\Users\Public\'
+  deleted_archives:
+    OriginalPath|endswith|any:
+      - '.zip'
+      - '.rar'
+      - '.7z'
+    FileSize|gte: 10485760
+  deleted_evidence:
+    OriginalPath|endswith|any:
+      - '.evtx'
+      - '.log'
+      - '.etl'
+      - '.pcap'
+      - '.dmp'
+  condition: deleted_tools or deleted_scripts or deleted_archives or deleted_evidence
+falsepositives:
+  - Users deleting legitimately downloaded tools after use
+  - Routine cleanup of temporary scripts by administrators
+level: high
+fields:
+  - OriginalPath
+  - DeletionTime
+  - FileSize
+  - RecycleBinSID
+  - User
+custom:
+  mitre_tactic: "TA0005 – Defense Evasion"
+  mitre_technique: "T1070.004 – Indicator Removal: File Deletion"
+  chainsaw_compatible: false
+  investigation_note: |
+    The $I filename contains the SID of the user who deleted the file — map this
+    to a user account. $R files can be recovered and analyzed (hashed, scanned).
+    Large deleted archives near incident time may contain exfiltrated data that
+    was staged locally. Deleted .evtx files indicate deliberate evidence destruction.

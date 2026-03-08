@@ -1,0 +1,90 @@
+title: Archive Collected Data – Compression and Staging for Exfiltration
+id: d0e1f2a3-b8c9-4456-0346-578901234567
+status: stable
+description: |
+  Detects use of archiving tools to compress and stage data for exfiltration. Adversaries
+  use 7z, rar, zip, and tar to package collected files, often with password protection to
+  evade DLP inspection. Archiving of sensitive directories (Users, Documents, Desktop) and
+  use of password flags are strong indicators of data staging prior to exfiltration.
+references:
+  - https://attack.mitre.org/techniques/T1560/
+  - https://attack.mitre.org/techniques/T1560/001/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.collection
+  - attack.t1560
+  - attack.t1560.001
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  sevenzip_archive:
+    Image|endswith|any:
+      - '\7z.exe'
+      - '\7za.exe'
+      - '\7zr.exe'
+    CommandLine|contains|any:
+      - ' a '
+      - ' a -p'
+  rar_archive:
+    Image|endswith: '\rar.exe'
+    CommandLine|contains|any:
+      - ' a '
+      - ' a -hp'
+      - ' a -p'
+  password_protected:
+    CommandLine|contains|any:
+      - '-p '
+      - '-hp'
+      - '-password'
+      - '--password'
+      - ' -mem=AES256'
+  zip_powershell:
+    CommandLine|contains|any:
+      - 'Compress-Archive'
+      - 'ZipFile]::CreateFromDirectory'
+      - 'IO.Compression.ZipFile'
+      - 'System.IO.Compression'
+  tar_archive:
+    Image|endswith|any:
+      - '\tar.exe'
+      - '\bsdtar.exe'
+    CommandLine|contains|any:
+      - '-czf'
+      - '-cjf'
+      - '-cf'
+  sensitive_dirs_targeted:
+    CommandLine|contains|any:
+      - '\Desktop\'
+      - '\Documents\'
+      - '\Downloads\'
+      - 'C:\Users\'
+      - '\Shares\'
+      - '\Finance\'
+      - '\HR\'
+      - '\Confidential'
+  makecab_staging:
+    Image|endswith: '\makecab.exe'
+  condition: (sevenzip_archive or rar_archive or zip_powershell or tar_archive or makecab_staging) and (password_protected or sensitive_dirs_targeted)
+falsepositives:
+  - Legitimate backup operations using 7zip or rar
+  - Software build pipelines archiving artifacts
+  - Users compressing files for email attachments
+level: medium
+fields:
+  - Image
+  - CommandLine
+  - ParentImage
+  - User
+  - EventID
+custom:
+  mitre_tactic: "TA0009 – Collection"
+  mitre_technique: "T1560 – Archive Collected Data"
+  windows_event_ids: ["4688", "1"]
+  investigation_note: |
+    Password-protected archives targeting sensitive directories = data staging for exfiltration.
+    Check the output path of the archive — staging to Temp or ProgramData is suspicious.
+    Look for subsequent T1048 (exfiltration) events within the same timeframe.
+    Archive size can indicate data volume: correlate with Sysmon EventID 11 (FileCreate).
+    7z.exe with -mhe=on (header encryption) hides the file listing from inspection.

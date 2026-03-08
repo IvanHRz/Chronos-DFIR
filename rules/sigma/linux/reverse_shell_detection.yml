@@ -1,0 +1,89 @@
+title: Linux Reverse Shell Detection – Network Shell Spawning
+id: c9d0e1f2-3939-4c3d-d4e5-f6a7b8c9d0e1
+status: stable
+description: |
+  Detects common reverse shell patterns on Linux systems including bash, Python,
+  Perl, Ruby, PHP, and netcat reverse shells. Also covers less common techniques
+  like socat, awk, and /dev/tcp-based shells. These are primary post-exploitation
+  techniques for establishing interactive command and control channels.
+references:
+  - https://attack.mitre.org/techniques/T1059/004/
+  - https://attack.mitre.org/techniques/T1071/001/
+  - https://www.revshells.com/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.execution
+  - attack.t1059.004
+  - attack.command_and_control
+  - platform.linux
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  bash_reverse_shell:
+    CommandLine|contains|any:
+      - 'bash -i >& /dev/tcp/'
+      - 'bash -c "bash -i'
+      - '/bin/sh -i >& /dev/tcp/'
+      - '0>&1'
+      - 'exec 5<>/dev/tcp/'
+  python_reverse_shell:
+    CommandLine|contains|any:
+      - 'python -c.*socket'
+      - 'python3 -c.*socket'
+      - 'import socket,subprocess,os'
+      - 'import pty;pty.spawn'
+  nc_reverse_shell:
+    CommandLine|contains|any:
+      - 'nc -e /bin/'
+      - 'ncat -e /bin/'
+      - 'nc.*-c /bin/'
+      - 'mkfifo /tmp/'
+      - 'mknod /tmp/.*p'
+      - 'rm /tmp/f;mkfifo'
+  perl_reverse_shell:
+    CommandLine|contains|any:
+      - 'perl -e.*socket'
+      - 'perl -MIO -e'
+      - 'use IO::Socket::INET'
+  php_reverse_shell:
+    CommandLine|contains|any:
+      - 'php -r.*fsockopen'
+      - 'php -r.*socket_create'
+      - 'php -r.*exec('
+  socat_shell:
+    CommandLine|contains|any:
+      - 'socat exec:'
+      - 'socat tcp'
+      - 'socat.*EXEC:'
+      - 'socat.*PTY'
+  ruby_reverse_shell:
+    CommandLine|contains|any:
+      - 'ruby -rsocket'
+      - 'ruby -e.*TCPSocket'
+  condition: bash_reverse_shell or python_reverse_shell or nc_reverse_shell or perl_reverse_shell or php_reverse_shell or socat_shell or ruby_reverse_shell
+falsepositives:
+  - Penetration testing activities
+  - Network debugging using netcat for legitimate purposes
+  - Development servers with socket-based testing
+level: critical
+fields:
+  - CommandLine
+  - Image
+  - User
+  - PID
+  - PPID
+  - ParentImage
+  - Hostname
+  - SourceIP
+custom:
+  mitre_tactic: "TA0002 – Execution"
+  mitre_technique: "T1059.004 – Command and Scripting Interpreter: Unix Shell"
+  chainsaw_compatible: false
+  investigation_note: |
+    Reverse shells redirect stdin/stdout/stderr to a network socket. The /dev/tcp/
+    pattern is bash-specific and leaves traces in bash history. mkfifo-based shells
+    are harder to detect as they use named pipes. Correlate with network connections
+    to identify the C2 server IP. Check parent process — web server children (apache,
+    nginx) spawning shells indicate webshell or RCE exploitation.

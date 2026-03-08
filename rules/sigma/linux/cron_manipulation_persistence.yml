@@ -1,0 +1,79 @@
+title: Linux Cron Job Manipulation – Scheduled Task Persistence
+id: b0c1d2e3-2020-4b4c-c5d6-e7f8a9b0c1d2
+status: stable
+description: |
+  Detects suspicious cron job creation and manipulation on Linux systems used for
+  persistence. Covers crontab edits, writes to /etc/cron.d/ and /etc/cron.*/
+  directories, at/batch job creation, and anacron abuse. Identifies entries that
+  download payloads, spawn reverse shells, or execute from world-writable paths.
+references:
+  - https://attack.mitre.org/techniques/T1053/003/
+  - https://www.cyberciti.biz/faq/how-do-i-add-jobs-to-cron-under-linux-or-unix-oses/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.persistence
+  - attack.t1053.003
+  - platform.linux
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  crontab_edit:
+    Image|endswith: '/crontab'
+    CommandLine|contains|any:
+      - '-e'
+      - '-l'
+      - '-r'
+  cron_dir_write:
+    TargetFilename|contains|any:
+      - '/etc/cron.d/'
+      - '/etc/cron.daily/'
+      - '/etc/cron.hourly/'
+      - '/etc/cron.weekly/'
+      - '/etc/cron.monthly/'
+      - '/var/spool/cron/'
+      - '/var/spool/cron/crontabs/'
+  at_job_creation:
+    Image|endswith|any:
+      - '/at'
+      - '/batch'
+    CommandLine|contains|any:
+      - 'at '
+      - 'batch'
+  suspicious_cron_content:
+    CommandLine|contains|any:
+      - 'curl'
+      - 'wget'
+      - '/dev/tcp/'
+      - 'bash -i'
+      - 'sh -i'
+      - 'nc '
+      - 'ncat'
+      - 'python -c'
+      - 'python3 -c'
+      - 'base64'
+      - '/tmp/'
+      - '/dev/shm/'
+  condition: crontab_edit or cron_dir_write or at_job_creation or suspicious_cron_content
+falsepositives:
+  - System package managers adding legitimate cron jobs
+  - Log rotation and backup scripts
+  - Monitoring agents with scheduled tasks
+level: medium
+fields:
+  - Image
+  - CommandLine
+  - TargetFilename
+  - User
+  - PID
+  - Hostname
+custom:
+  mitre_tactic: "TA0003 – Persistence"
+  mitre_technique: "T1053.003 – Scheduled Task/Job: Cron"
+  chainsaw_compatible: false
+  investigation_note: |
+    Check all cron directories: /etc/crontab, /etc/cron.d/, /var/spool/cron/crontabs/.
+    Root-owned cron entries executing user-writable scripts are privilege escalation
+    vectors. @reboot entries execute on every boot. Compare crontab modification
+    timestamps with SSH authentication events to link the activity to an attacker.

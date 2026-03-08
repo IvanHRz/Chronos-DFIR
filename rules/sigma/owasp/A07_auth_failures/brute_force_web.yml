@@ -1,0 +1,60 @@
+title: Web Brute Force / Credential Stuffing — OWASP A07:2021
+id: b8c9d0e1-f2a3-4567-bcde-678901234567
+status: stable
+description: |
+  Detects web-based brute force attacks and credential stuffing via
+  analysis of HTTP 401/403 error rates per IP. High volume on same endpoint
+  = Brute Force. High volume from many IPs on same endpoint = Credential Stuffing.
+  OWASP A07:2021 – Identification and Authentication Failures.
+references:
+  - https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures/
+  - https://attack.mitre.org/techniques/T1110/001/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/03
+tags:
+  - owasp.a07_2021
+  - attack.credential_access
+  - attack.t1110.001
+  - attack.t1110.004
+logsource:
+  category: webserver
+  product: any
+detection:
+  auth_endpoint:
+    uri|contains|any:
+      - "/login"
+      - "/signin"
+      - "/auth"
+      - "/wp-login.php"
+      - "/admin"
+      - "/api/token"
+      - "/oauth/token"
+  auth_failure_status:
+    status_code|contains|any:
+      - "401"
+      - "403"
+  # Note: Brute force requires aggregation — use the Polars aggregation logic
+  # below to detect > 10 failures per IP within 5 minutes
+  condition: auth_endpoint and auth_failure_status
+falsepositives:
+  - Users forgetting passwords (low volume)
+  - Load balancer health checks
+level: medium
+fields:
+  - externalIp
+  - uri
+  - status_code
+  - user_agent
+  - timestamp
+aggregation:
+  # Polars implementation — count 401/403 per IP per 5-minute window
+  group_by:
+    - externalIp
+  time_window: "5m"
+  threshold: 10
+  alert_as: "BRUTE_FORCE"
+custom:
+  owasp_category: "A07:2021 – Identification and Authentication Failures"
+  attack_type: "Brute Force / Credential Stuffing"
+  mitre_tactic: "TA0006 – Credential Access"
+  mitre_technique: "T1110.001 – Brute Force: Password Guessing"

@@ -1,0 +1,60 @@
+title: RDP Lateral Movement – Remote Interactive Logon
+id: b2c3d4e5-f6a7-8901-bcde-f12345678901
+status: stable
+description: |
+  Detects lateral movement via Remote Desktop Protocol (RDP).
+  Event ID 4624 type 10 indicates a successful remote interactive logon.
+  Event ID 4778 indicates a reconnected RDP session.
+  Unusual source IPs or accounts logging in remotely may indicate attacker pivoting.
+references:
+  - https://attack.mitre.org/techniques/T1021/001/
+  - https://github.com/WithSecureLabs/chainsaw
+  - https://github.com/sbousseaden/EVTX-ATTACK-SAMPLES
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/07
+tags:
+  - attack.lateral_movement
+  - attack.t1021.001
+  - chainsaw
+  - evtx_attack_samples
+logsource:
+  product: windows
+  service: security
+detection:
+  rdp_logon_success:
+    EventID: '4624'
+    LogonType: '10'
+  rdp_session_reconnect:
+    EventID: '4778'
+  tscon_abuse:
+    EventID: '4688'
+    NewProcessName|endswith: '\tscon.exe'
+  mstsc_spawn:
+    Image|endswith: '\mstsc.exe'
+  rdp_outbound:
+    Image|endswith|any:
+      - '\mstsc.exe'
+      - '\rdp.exe'
+    CommandLine|contains|any:
+      - '/v:'
+      - '-s:'
+  condition: rdp_logon_success or rdp_session_reconnect or tscon_abuse or mstsc_spawn or rdp_outbound
+falsepositives:
+  - IT administrators legitimately using RDP for system management
+  - Helpdesk tools with RDP functionality
+  - Automated monitoring agents
+level: medium
+fields:
+  - EventID
+  - LogonType
+  - IpAddress
+  - TargetUserName
+  - SubjectUserName
+  - WorkstationName
+  - NewProcessName
+custom:
+  mitre_tactic: "TA0008 – Lateral Movement"
+  mitre_technique: "T1021.001 – Remote Services: Remote Desktop Protocol"
+  windows_event_ids: ["4624", "4778", "4779", "4688"]
+  chainsaw_compatible: true
+  logon_type_10: "Remote Interactive (RDP)"

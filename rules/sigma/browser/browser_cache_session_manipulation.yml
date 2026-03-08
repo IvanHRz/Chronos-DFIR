@@ -1,0 +1,82 @@
+title: Browser Cache and Session Manipulation – Anti-Forensics and Hijacking
+id: f0a1b2c3-3030-4f4a-a5b6-c7d8e9f0a1b2
+status: stable
+description: |
+  Detects manipulation of browser cache, session storage, and session restore files
+  that may indicate anti-forensic activity (clearing evidence) or session hijacking
+  preparation. Also covers TypedURLs/keyword search history access for reconnaissance.
+references:
+  - https://attack.mitre.org/techniques/T1070/003/
+  - https://attack.mitre.org/techniques/T1539/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.defense_evasion
+  - attack.t1070.003
+  - attack.credential_access
+  - attack.t1539
+  - artifact.browser
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  cache_deletion:
+    CommandLine|contains|any:
+      - 'Cache\\Cache_Data'
+      - 'cache2\\entries'
+      - 'Code Cache'
+      - 'GPUCache'
+      - 'ShaderCache'
+    CommandLine|contains|any:
+      - 'del '
+      - 'rmdir'
+      - 'Remove-Item'
+      - 'rd '
+  session_restore_access:
+    CommandLine|contains|any:
+      - 'sessionstore.jsonlz4'
+      - 'Session Storage'
+      - 'Sessions\\Session_'
+      - 'Current Session'
+      - 'Last Session'
+  typed_urls_access:
+    CommandLine|contains|any:
+      - 'TypedURLs'
+      - 'TypedURLsTime'
+      - 'keywords'
+      - 'Favicons'
+      - 'Top Sites'
+  private_browsing_artifacts:
+    CommandLine|contains|any:
+      - 'InPrivate'
+      - 'private_browsing'
+      - 'tor-browser'
+      - 'pbmode'
+  browser_extension_manipulation:
+    CommandLine|contains|any:
+      - 'Extensions\\'
+      - 'extensions.json'
+      - 'addons.json'
+      - 'extension_install_forcelist'
+  condition: cache_deletion or session_restore_access or typed_urls_access or private_browsing_artifacts or browser_extension_manipulation
+falsepositives:
+  - Browser auto-cleanup features
+  - Disk cleanup utilities removing browser cache
+  - Users manually clearing browsing data
+level: medium
+fields:
+  - Image
+  - CommandLine
+  - User
+  - ParentImage
+  - Timestamp
+custom:
+  mitre_tactic: "TA0005 – Defense Evasion"
+  mitre_technique: "T1070.003 – Indicator Removal: Clear Command History"
+  chainsaw_compatible: false
+  investigation_note: |
+    Session restore files contain active session tokens that can be used for
+    session hijacking. TypedURLs in the registry (IE/Edge Legacy) and History
+    databases reveal search patterns and frequently visited sites. Malicious
+    browser extensions can capture credentials, modify web pages, and exfiltrate
+    data. Check extension_install_forcelist for GPO-pushed malicious extensions.

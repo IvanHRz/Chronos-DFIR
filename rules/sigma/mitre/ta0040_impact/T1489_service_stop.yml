@@ -1,0 +1,100 @@
+title: Service Stop – Pre-Ransomware and Anti-Security Service Disruption
+id: a7b8c9d0-3737-4a1b-b2c3-d4e5f6a7b8c9
+status: stable
+description: |
+  Detects stopping of critical services commonly disabled before ransomware deployment
+  or to impair security controls. Covers SQL Server, Exchange, backup software,
+  antivirus, VSS (Volume Shadow Copy), and security monitoring services. Also detects
+  bulk service stopping via sc.exe, net stop, or PowerShell.
+references:
+  - https://attack.mitre.org/techniques/T1489/
+  - https://attack.mitre.org/techniques/T1562/001/
+  - https://www.cisa.gov/uscert/ncas/alerts/aa21-131a
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.impact
+  - attack.t1489
+  - attack.defense_evasion
+  - attack.t1562.001
+  - chainsaw
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  service_stop_cmd:
+    Image|endswith|any:
+      - '\sc.exe'
+      - '\net.exe'
+      - '\net1.exe'
+    CommandLine|contains|any:
+      - 'stop'
+      - 'delete'
+      - 'config.*disabled'
+  critical_service_names:
+    CommandLine|contains|any:
+      - 'vss'
+      - 'sql'
+      - 'exchange'
+      - 'backup'
+      - 'veeam'
+      - 'acronis'
+      - 'sophos'
+      - 'symantec'
+      - 'mcafee'
+      - 'norton'
+      - 'crowdstrike'
+      - 'sentinel'
+      - 'defender'
+      - 'carbonblack'
+      - 'cylance'
+      - 'malwarebytes'
+      - 'avgnt'
+      - 'avast'
+      - 'kaspersky'
+      - 'eset'
+  powershell_service_stop:
+    Image|endswith|any:
+      - '\powershell.exe'
+      - '\pwsh.exe'
+    CommandLine|contains|any:
+      - 'Stop-Service'
+      - 'Set-Service.*Disabled'
+      - 'Disable-Service'
+  wmic_service_stop:
+    Image|endswith: '\wmic.exe'
+    CommandLine|contains|any:
+      - 'service'
+      - 'call stopservice'
+  taskkill_security:
+    Image|endswith: '\taskkill.exe'
+    CommandLine|contains|any:
+      - 'MsMpEng'
+      - 'ccSvcHst'
+      - 'avp'
+      - 'ekrn'
+      - 'mbam'
+      - 'SavService'
+  condition: (service_stop_cmd and critical_service_names) or powershell_service_stop or wmic_service_stop or taskkill_security
+falsepositives:
+  - Legitimate service maintenance during patching
+  - Authorized AV uninstallation during software migration
+  - Database maintenance windows
+level: critical
+fields:
+  - Image
+  - CommandLine
+  - ParentImage
+  - User
+  - Computer
+  - Timestamp
+custom:
+  mitre_tactic: "TA0040 – Impact"
+  mitre_technique: "T1489 – Service Stop"
+  chainsaw_compatible: true
+  investigation_note: |
+    Bulk service stopping (multiple services in seconds) is a strong ransomware
+    pre-deployment indicator. VSS service (Volume Shadow Copy) stopping prevents
+    recovery from shadow copies. SQL/Exchange service stops indicate preparation
+    for database encryption. Correlate with file creation events for ransom notes
+    and process creation for encryption binaries.

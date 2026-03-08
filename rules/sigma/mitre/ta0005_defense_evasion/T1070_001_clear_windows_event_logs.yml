@@ -1,0 +1,75 @@
+title: Clear Windows Event Logs – Indicator Removal
+id: f6a7b8c9-d0e1-2345-fabc-456789012345
+status: stable
+description: |
+  Detects deliberate clearing of Windows event logs, a classic anti-forensics technique
+  used to destroy evidence of attacker activity. Covers wevtutil, PowerShell cmdlets,
+  and the native Windows API path (EvtClearLog). Security log clearing (Event 1102)
+  and System log clearing (Event 104) are high-fidelity indicators of post-compromise
+  cleanup. Also detects bulk log clearing across multiple channels.
+references:
+  - https://attack.mitre.org/techniques/T1070/001/
+  - https://github.com/WithSecureLabs/chainsaw
+  - https://docs.microsoft.com/en-us/windows/security/threat-protection/auditing/event-1102
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/07
+tags:
+  - attack.defense_evasion
+  - attack.t1070.001
+  - chainsaw
+  - anti_forensics
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  wevtutil_clear_log:
+    Image|endswith: '\wevtutil.exe'
+    CommandLine|contains|any:
+      - ' cl '
+      - ' clear-log '
+      - '/e:false'
+  powershell_clear_eventlog:
+    Image|endswith|any:
+      - '\powershell.exe'
+      - '\pwsh.exe'
+    CommandLine|contains|any:
+      - 'Clear-EventLog'
+      - 'Remove-EventLog'
+      - 'Limit-EventLog -OverflowAction DoNotOverwrite'
+      - '[System.Diagnostics.EventLog]::Delete'
+  security_log_cleared:
+    EventID: '1102'
+    Channel: 'Security'
+  system_log_cleared:
+    EventID: '104'
+    Channel: 'System'
+  log_service_stopped:
+    EventID: '7036'
+    CommandLine|contains: 'Windows Event Log'
+  bulk_log_clear_cmd:
+    Image|endswith: '\cmd.exe'
+    CommandLine|contains|all:
+      - 'wevtutil'
+      - 'for'
+  condition: wevtutil_clear_log or powershell_clear_eventlog or security_log_cleared or system_log_cleared or log_service_stopped or bulk_log_clear_cmd
+falsepositives:
+  - Authorized log rotation or archival scripts run by IT operations
+  - Security information and event management (SIEM) agents performing maintenance
+  - Log management software clearing processed logs
+level: high
+fields:
+  - Image
+  - CommandLine
+  - EventID
+  - Channel
+  - User
+  - Computer
+custom:
+  mitre_tactic: "TA0005 – Defense Evasion"
+  mitre_technique: "T1070.001 – Indicator Removal: Clear Windows Event Logs"
+  windows_event_ids: ["1102", "104", "7036"]
+  chainsaw_compatible: true
+  investigation_note: |
+    Event 1102 is one of the highest-fidelity indicators in Windows forensics.
+    Correlate with logon events (4624) immediately before the clear to identify
+    which account performed the action. Check for wevtutil in Prefetch and Shimcache.

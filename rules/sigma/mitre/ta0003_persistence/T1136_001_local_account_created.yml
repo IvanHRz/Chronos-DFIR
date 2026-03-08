@@ -1,0 +1,58 @@
+title: Local User Account Created – Backdoor Account Persistence
+id: b8c9d0e1-f2a3-4567-bcde-678901234567
+status: stable
+description: |
+  Detects creation of new local user accounts, a common attacker persistence technique.
+  Attackers create backdoor accounts to maintain access even if initial credentials
+  are rotated. Also detects accounts being added to the Administrators group.
+  Special attention to accounts created outside business hours or via scripts.
+references:
+  - https://attack.mitre.org/techniques/T1136/001/
+  - https://github.com/WithSecureLabs/chainsaw
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/07
+tags:
+  - attack.persistence
+  - attack.t1136.001
+  - chainsaw
+logsource:
+  product: windows
+  service: security
+detection:
+  account_created:
+    EventID: '4720'
+  account_enabled:
+    EventID: '4722'
+  admin_group_add:
+    EventID: '4732'
+    GroupName|contains: 'Administrators'
+  net_user_create:
+    Image|endswith: '\net.exe'
+    CommandLine|contains: 'user /add'
+  net_localgroup_admin:
+    Image|endswith|any:
+      - '\net.exe'
+      - '\net1.exe'
+    CommandLine|contains|all:
+      - 'localgroup'
+      - 'Administrators'
+      - '/add'
+  condition: account_created or account_enabled or admin_group_add or net_user_create or net_localgroup_admin
+falsepositives:
+  - IT administrators creating legitimate service or user accounts
+  - Provisioning automation (Ansible, Puppet, SCCM)
+  - Onboarding scripts for new employees
+level: medium
+fields:
+  - EventID
+  - SubjectUserName
+  - TargetUserName
+  - GroupName
+  - CommandLine
+  - Image
+  - User
+custom:
+  mitre_tactic: "TA0003 – Persistence"
+  mitre_technique: "T1136.001 – Create Account: Local Account"
+  windows_event_ids: ["4720", "4722", "4732", "4728", "4756"]
+  chainsaw_compatible: true

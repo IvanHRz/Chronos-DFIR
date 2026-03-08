@@ -1,0 +1,87 @@
+title: C2 Over Application Layer Protocol – Suspicious HTTP and DNS Patterns
+id: f2a3b4c5-d0e1-4678-2568-790123456789
+status: stable
+description: |
+  Detects command and control communication over application layer protocols including
+  suspicious HTTP user agents (python-requests, Go-http-client), connections to known
+  paste/file sharing sites used for C2 dead drops, and DNS-based C2 indicators. These
+  patterns are characteristic of automated implants and C2 frameworks.
+references:
+  - https://attack.mitre.org/techniques/T1071/
+  - https://attack.mitre.org/techniques/T1071/001/
+  - https://attack.mitre.org/techniques/T1071/004/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.command_and_control
+  - attack.t1071
+  - attack.t1071.001
+  - attack.t1071.004
+logsource:
+  product: windows
+detection:
+  suspicious_user_agents:
+    CommandLine|contains|any:
+      - 'python-requests'
+      - 'Go-http-client'
+      - 'Mozilla/4.0 (compatible;)'
+      - 'Java/'
+      - 'Wget/'
+      - 'curl/'
+      - 'CobaltStrike'
+      - 'MSIE 7.0'
+      - 'httpx'
+  paste_sites:
+    CommandLine|contains|any:
+      - 'pastebin.com'
+      - 'hastebin.com'
+      - 'paste.ee'
+      - 'ghostbin.com'
+      - 'dpaste.org'
+      - 'transfer.sh'
+      - 'file.io'
+      - 'temp.sh'
+      - 'anonfiles.com'
+      - 'catbox.moe'
+      - 'ngrok.io'
+      - 'serveo.net'
+      - 'localtunnel.me'
+  dns_c2_indicators:
+    CommandLine|contains|any:
+      - 'nslookup -type=TXT'
+      - 'Resolve-DnsName -Type TXT'
+      - 'dig TXT'
+      - 'nslookup -q=txt'
+  encoded_url_fetch:
+    CommandLine|contains|any:
+      - 'DownloadString(''http'
+      - 'DownloadFile(''http'
+      - 'Invoke-WebRequest http'
+      - 'iwr http'
+      - 'wget http'
+      - 'curl http'
+      - 'Start-BitsTransfer -Source http'
+  condition: suspicious_user_agents or paste_sites or dns_c2_indicators or encoded_url_fetch
+falsepositives:
+  - Developers using python-requests or Go clients for legitimate API calls
+  - IT staff using nslookup or dig for DNS troubleshooting
+  - Legitimate use of pastebin for code sharing
+level: medium
+fields:
+  - Image
+  - CommandLine
+  - ParentImage
+  - User
+  - EventID
+  - DestinationIp
+  - DestinationHostname
+custom:
+  mitre_tactic: "TA0011 – Command and Control"
+  mitre_technique: "T1071 – Application Layer Protocol"
+  windows_event_ids: ["4688", "1", "3"]
+  investigation_note: |
+    Non-standard user agents from system processes indicate automated C2 activity.
+    Paste site access from non-browser processes (cmd, powershell) is suspicious.
+    DNS TXT queries to random/unusual domains may indicate DNS tunneling (T1071.004).
+    Correlate with Sysmon EventID 3 (NetworkConnect) for destination IP analysis.
+    Check frequency and regularity of connections — beaconing patterns indicate C2.

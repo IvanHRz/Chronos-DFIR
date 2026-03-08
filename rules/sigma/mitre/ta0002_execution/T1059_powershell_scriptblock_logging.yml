@@ -1,0 +1,110 @@
+title: PowerShell Script Block Logging – Suspicious Content Detection
+id: b4c5d6e7-1414-4b8c-c9d0-e1f2a3b4c5d6
+status: stable
+description: |
+  Detects suspicious PowerShell script block content captured via Event IDs 4103/4104
+  (Script Block Logging) and 800/600 (Module/Provider logging). Script block logging
+  captures the deobfuscated code that PowerShell actually executes, bypassing encoding
+  and obfuscation techniques. This rule targets AMSI bypass attempts, credential access
+  cmdlets, download cradles, and reflective loading techniques.
+references:
+  - https://attack.mitre.org/techniques/T1059/001/
+  - https://attack.mitre.org/techniques/T1562/001/
+  - https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_logging
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.execution
+  - attack.t1059.001
+  - attack.defense_evasion
+  - attack.t1562.001
+  - chainsaw
+logsource:
+  product: windows
+  service: powershell
+detection:
+  scriptblock_event:
+    EventID:
+      - '4103'
+      - '4104'
+  amsi_bypass:
+    ScriptBlockText|contains|any:
+      - 'AmsiUtils'
+      - 'amsiInitFailed'
+      - 'AmsiScanBuffer'
+      - 'Disable-Amsi'
+      - 'Set-MpPreference'
+      - 'DisableRealtimeMonitoring'
+      - 'Unload-Sysmon'
+  credential_access:
+    ScriptBlockText|contains|any:
+      - 'Get-Credential'
+      - 'Invoke-Mimikatz'
+      - 'Invoke-Kerberoast'
+      - 'Get-GPPPassword'
+      - 'Find-GPOPasswords'
+      - 'Invoke-NinjaCopy'
+      - 'SecureString'
+      - 'ConvertTo-SecureString'
+      - 'NetworkCredential'
+      - 'CredentialManager'
+  download_cradle:
+    ScriptBlockText|contains|any:
+      - 'Net.WebClient'
+      - 'DownloadString'
+      - 'DownloadFile'
+      - 'DownloadData'
+      - 'Invoke-WebRequest'
+      - 'Invoke-RestMethod'
+      - 'Start-BitsTransfer'
+      - 'iwr '
+      - 'irm '
+      - 'curl '
+      - 'wget '
+  reflective_loading:
+    ScriptBlockText|contains|any:
+      - 'Reflection.Assembly'
+      - 'LoadWithPartialName'
+      - 'Load('
+      - 'GetType('
+      - 'InvokeMember'
+      - 'DllImport'
+      - 'GetProcAddress'
+      - 'VirtualAlloc'
+      - 'CreateThread'
+      - 'WaitForSingleObject'
+  recon_cmdlets:
+    ScriptBlockText|contains|any:
+      - 'Get-ADUser'
+      - 'Get-ADGroup'
+      - 'Get-ADComputer'
+      - 'Get-DomainUser'
+      - 'Get-DomainGroup'
+      - 'Get-DomainComputer'
+      - 'Find-LocalAdminAccess'
+      - 'Invoke-ShareFinder'
+      - 'Invoke-PortScan'
+  condition: scriptblock_event and (amsi_bypass or credential_access or download_cradle or reflective_loading or recon_cmdlets)
+falsepositives:
+  - Security tools that use PowerShell for legitimate scanning
+  - IT automation scripts using WebClient for software deployment
+  - Active Directory management scripts
+level: high
+fields:
+  - EventID
+  - ScriptBlockText
+  - ScriptBlockId
+  - Path
+  - Computer
+  - User
+custom:
+  mitre_tactic: "TA0002 – Execution"
+  mitre_technique: "T1059.001 – Command and Scripting Interpreter: PowerShell"
+  windows_event_ids: ["4103", "4104", "800", "600"]
+  chainsaw_compatible: true
+  investigation_note: |
+    Script blocks may span multiple events (ScriptBlockId groups them). Event 4104
+    captures the deobfuscated content — even base64-encoded or string-concatenated
+    scripts are logged in clear text after PowerShell processes them. AMSI bypass
+    attempts (amsiInitFailed) are critical to flag as they precede all other activity.
+    Correlate with process creation (4688) for the parent PowerShell process context.

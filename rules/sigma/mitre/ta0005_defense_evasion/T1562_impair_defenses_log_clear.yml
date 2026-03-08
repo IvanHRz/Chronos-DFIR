@@ -1,0 +1,55 @@
+title: Security Log or Audit Policy Cleared / Disabled
+id: d4e5f6a7-b8c9-0123-defa-234567890123
+status: stable
+description: |
+  Detects attempts to clear Windows event logs or disable audit policies.
+  This is a classic defense evasion technique (T1562) used by attackers
+  to hide their tracks after compromising a system.
+references:
+  - https://attack.mitre.org/techniques/T1562/002/
+  - https://attack.mitre.org/techniques/T1562/006/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/03
+tags:
+  - attack.defense_evasion
+  - attack.t1562.002
+  - attack.t1562.006
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  wevtutil_clear:
+    Image|endswith: '\wevtutil.exe'
+    CommandLine|contains|any:
+      - ' cl '
+      - ' clear-log '
+  auditpol_disable:
+    Image|endswith: '\auditpol.exe'
+    CommandLine|contains:
+      - '/success:disable'
+  powershell_clear:
+    Image|endswith:
+      - '\powershell.exe'
+      - '\pwsh.exe'
+    CommandLine|contains|any:
+      - 'Clear-EventLog'
+      - 'Limit-EventLog'
+      - 'Remove-EventLog'
+  event_log_cleared_id:
+    EventID:
+      - '1102'  # Security log cleared
+      - '104'   # System log cleared
+  condition: wevtutil_clear or auditpol_disable or powershell_clear or event_log_cleared_id
+falsepositives:
+  - Authorized log rotation scripts
+  - Backup software clearing old logs
+level: high
+fields:
+  - CommandLine
+  - Image
+  - User
+  - EventID
+custom:
+  mitre_tactic: "TA0005 – Defense Evasion"
+  mitre_technique: "T1562.002 – Disable Windows Event Logging"
+  windows_event_ids: ["4719", "1102", "104"]

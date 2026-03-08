@@ -1,0 +1,66 @@
+title: RDP Lateral Movement – Detailed Session Analysis
+id: d6e7f8a9-1616-4d0e-e1f2-a3b4c5d6e7f8
+status: stable
+description: |
+  Detects detailed RDP lateral movement patterns beyond basic 4624 Type 10 detection.
+  Covers RDP session initiation (1149), reconnection (4778/4779), NLA authentication
+  failures, and suspicious RDP-related process spawning. Also detects RDP tunneling
+  indicators and non-standard port usage.
+references:
+  - https://attack.mitre.org/techniques/T1021/001/
+  - https://www.13cubed.com/downloads/rdp_event_log_cheat_sheet.pdf
+  - https://docs.microsoft.com/en-us/windows/security/threat-protection/auditing/event-4624
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.lateral_movement
+  - attack.t1021.001
+  - chainsaw
+logsource:
+  product: windows
+  service: security
+detection:
+  rdp_network_logon:
+    EventID: '4624'
+    LogonType: '10'
+  rdp_session_initiation:
+    EventID: '1149'
+    Channel: 'Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational'
+  rdp_session_reconnect:
+    EventID:
+      - '4778'
+      - '4779'
+  rdp_auth_failure:
+    EventID: '4625'
+    LogonType: '10'
+  rdp_shadowing:
+    EventID: '4624'
+    LogonType: '10'
+    ProcessName|contains: 'tscon'
+  condition: rdp_network_logon or rdp_session_initiation or rdp_session_reconnect or rdp_auth_failure or rdp_shadowing
+falsepositives:
+  - Legitimate remote administration via RDP
+  - Help desk staff using RDP for support
+  - Jump box / bastion host access
+level: medium
+fields:
+  - EventID
+  - TargetUserName
+  - SourceNetworkAddress
+  - LogonType
+  - AuthenticationPackageName
+  - WorkstationName
+  - SessionName
+  - ClientAddress
+  - ClientName
+custom:
+  mitre_tactic: "TA0008 – Lateral Movement"
+  mitre_technique: "T1021.001 – Remote Services: RDP"
+  windows_event_ids: ["4624", "4625", "1149", "4778", "4779"]
+  chainsaw_compatible: true
+  investigation_note: |
+    Build an RDP session timeline: 1149 (connection initiated) -> 4624 Type 10
+    (authenticated) -> 4778/4779 (reconnect/disconnect). SourceNetworkAddress
+    reveals the originating machine. Multiple failed 4625 Type 10 events followed
+    by a successful 4624 indicates RDP brute force. Check for RDP on non-standard
+    ports by correlating with Sysmon Event 3 (network connections to mstsc.exe).

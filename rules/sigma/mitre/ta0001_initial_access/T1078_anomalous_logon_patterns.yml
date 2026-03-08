@@ -1,0 +1,96 @@
+title: Anomalous Logon Patterns – Account Usage and Type Anomalies
+id: d4e5f6a7-3434-4d8e-e9f0-a1b2c3d4e5f6
+status: stable
+description: |
+  Detects anomalous Windows logon patterns that go beyond simple brute force detection.
+  Covers logon type mismatches (service accounts logging on interactively), impossible
+  travel indicators (rapid logons from different workstations), off-hours authentication,
+  and anomalous logon types (batch, service, network cleartext). Uses Events 4624, 4625,
+  and 4648 with contextual field analysis.
+references:
+  - https://attack.mitre.org/techniques/T1078/
+  - https://docs.microsoft.com/en-us/windows/security/threat-protection/auditing/event-4624
+  - https://www.ultimatewindowssecurity.com/securitylog/encyclopedia/event.aspx?eventid=4624
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.initial_access
+  - attack.t1078
+  - attack.lateral_movement
+  - chainsaw
+logsource:
+  product: windows
+  service: security
+detection:
+  service_account_interactive:
+    EventID: '4624'
+    LogonType:
+      - '2'
+      - '10'
+    TargetUserName|contains|any:
+      - 'svc_'
+      - 'svc-'
+      - 'service'
+      - 'sql'
+      - 'iis'
+      - 'app_'
+      - 'task_'
+  cleartext_logon:
+    EventID: '4624'
+    LogonType: '8'
+  new_logon_type3_admin:
+    EventID: '4624'
+    LogonType: '3'
+    TargetUserName|endswith|any:
+      - 'Administrator'
+      - 'admin'
+    IpAddress|not: '127.0.0.1'
+    IpAddress|not: '::1'
+    IpAddress|not: '-'
+  logon_from_disabled_account:
+    EventID: '4625'
+    SubStatus:
+      - '0xC0000072'
+      - '0xC000006E'
+  anonymous_logon_network:
+    EventID: '4624'
+    LogonType: '3'
+    TargetUserName: 'ANONYMOUS LOGON'
+    IpAddress|not: '-'
+  condition: service_account_interactive or cleartext_logon or new_logon_type3_admin or logon_from_disabled_account or anonymous_logon_network
+falsepositives:
+  - Service accounts with interactive logon rights in legacy environments
+  - IIS basic authentication using cleartext logon type 8
+  - Built-in administrator account used for emergency access
+level: high
+fields:
+  - EventID
+  - LogonType
+  - TargetUserName
+  - TargetDomainName
+  - IpAddress
+  - WorkstationName
+  - AuthenticationPackageName
+  - SubStatus
+  - ProcessName
+custom:
+  mitre_tactic: "TA0001 – Initial Access"
+  mitre_technique: "T1078 – Valid Accounts"
+  windows_event_ids: ["4624", "4625"]
+  chainsaw_compatible: true
+  logon_types:
+    "2": "Interactive (local console)"
+    "3": "Network (SMB, mapped drives)"
+    "4": "Batch (scheduled tasks)"
+    "5": "Service"
+    "7": "Unlock"
+    "8": "NetworkCleartext"
+    "9": "NewCredentials (RunAs /netonly)"
+    "10": "RemoteInteractive (RDP)"
+    "11": "CachedInteractive"
+  investigation_note: |
+    Service accounts should NEVER log on interactively (Type 2/10) — this indicates
+    credential compromise. LogonType 8 (cleartext) sends passwords unencrypted and
+    should be eliminated. Network logons (Type 3) from Admin accounts to multiple
+    machines in short succession indicate lateral movement. Anonymous logon from
+    external IPs may indicate null session enumeration.

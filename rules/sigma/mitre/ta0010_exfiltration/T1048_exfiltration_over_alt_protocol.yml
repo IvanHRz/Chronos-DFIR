@@ -1,0 +1,102 @@
+title: Exfiltration Over Alternative Protocol – DNS / ICMP / FTP / Non-Standard Port
+id: c9d0e1f2-a3b4-5678-cdef-789012345678
+status: stable
+description: |
+  Detects data exfiltration over protocols other than HTTPS, including DNS tunneling,
+  ICMP covert channels, FTP uploads, and outbound connections on non-standard ports.
+  Attackers use alternative protocols to bypass DLP controls and firewall rules that
+  focus on HTTP/S. DNS tunneling tools (dnscat2, iodine) and ICMP tunneling (icmptunnel,
+  ptunnel) produce characteristic command-line patterns and unusual payload sizes.
+references:
+  - https://attack.mitre.org/techniques/T1048/
+  - https://github.com/WithSecureLabs/chainsaw
+  - https://github.com/iagox86/dnscat2
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/07
+tags:
+  - attack.exfiltration
+  - attack.t1048
+  - chainsaw
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  dns_tunneling_tools:
+    Image|endswith|any:
+      - '\dnscat.exe'
+      - '\dnscat2.exe'
+      - '\iodine.exe'
+      - '\dns2tcp.exe'
+    CommandLine|contains|any:
+      - '--dns'
+      - '--secret'
+      - '-r dns'
+  ftp_upload:
+    Image|endswith|any:
+      - '\ftp.exe'
+      - '\winscp.exe'
+      - '\pscp.exe'
+    CommandLine|contains|any:
+      - '-s:'
+      - 'put '
+      - 'mput '
+  curl_non_https:
+    Image|endswith: '\curl.exe'
+    CommandLine|contains|any:
+      - ' ftp://'
+      - ' sftp://'
+      - ' smb://'
+      - ' --dns-servers'
+      - '-T '
+  bitsadmin_upload:
+    Image|endswith: '\bitsadmin.exe'
+    CommandLine|contains|any:
+      - '/upload'
+      - '/addfile'
+      - '/resume'
+  ncat_exfil:
+    Image|endswith|any:
+      - '\nc.exe'
+      - '\ncat.exe'
+      - '\netcat.exe'
+    CommandLine|contains|any:
+      - '-e '
+      - '-c '
+      - '< '
+  powershell_non_http_upload:
+    Image|endswith|any:
+      - '\powershell.exe'
+      - '\pwsh.exe'
+    CommandLine|contains|any:
+      - 'Net.FtpWebRequest'
+      - 'Net.Sockets.TcpClient'
+      - 'Net.Sockets.UdpClient'
+      - 'SendAsync'
+      - 'smtp'
+  icmp_tunnel:
+    CommandLine|contains|any:
+      - 'ptunnel'
+      - 'icmptunnel'
+      - 'ping -t'
+  condition: dns_tunneling_tools or ftp_upload or curl_non_https or bitsadmin_upload or ncat_exfil or powershell_non_http_upload or icmp_tunnel
+falsepositives:
+  - Authorized FTP backups to corporate file servers
+  - Network diagnostic tools used by IT operations
+  - BITS-based Windows Update components
+level: high
+fields:
+  - Image
+  - CommandLine
+  - ParentImage
+  - User
+  - Computer
+  - Destination_Entity
+custom:
+  mitre_tactic: "TA0010 – Exfiltration"
+  mitre_technique: "T1048 – Exfiltration Over Alternative Protocol"
+  windows_event_ids: ["4688", "1", "3"]
+  chainsaw_compatible: true
+  investigation_note: |
+    Correlate with network connection events (Sysmon 3) to identify destination IPs.
+    DNS tunneling may appear as unusually long DNS queries or high query frequency.
+    Review Destination_Entity field for suspicious external IPs or domains.

@@ -1,0 +1,43 @@
+title: Kerberoasting — Service Ticket Request with RC4 Encryption
+id: e5f6a7b8-c9d0-1234-efab-345678901234
+status: stable
+description: |
+  Detects Kerberoasting attacks via EventID 4769: Kerberos service ticket
+  requests using RC4-HMAC (0x17) encryption type. Attackers request service
+  tickets encrypted with RC4 so they can crack them offline.
+  Legitimate modern systems use AES256 (0x12) or AES128 (0x11).
+references:
+  - https://attack.mitre.org/techniques/T1558/003/
+  - https://adsecurity.org/?p=3458
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/03
+tags:
+  - attack.credential_access
+  - attack.t1558.003
+logsource:
+  category: authentication
+  product: windows
+detection:
+  kerberos_ticket_request:
+    EventID: '4769'
+  rc4_encryption:
+    TicketEncryptionType: '0x17'
+  not_machine_account:
+    TargetUserName|endswith: '$'
+  condition: kerberos_ticket_request and rc4_encryption and not not_machine_account
+falsepositives:
+  - Legacy systems that only support RC4 (Windows XP, old printers/scanners)
+  - Misconfigured Kerberos environments where AES is not enforced
+level: high
+fields:
+  - SubjectUserName
+  - TargetUserName
+  - ServiceName
+  - TicketOptions
+  - TicketEncryptionType
+  - IpAddress
+custom:
+  mitre_tactic: "TA0006 – Credential Access"
+  mitre_technique: "T1558.003 – Kerberoasting"
+  windows_event_id: "4769"
+  indicator: "TicketEncryptionType=0x17 (RC4-HMAC) = Kerberoasting"

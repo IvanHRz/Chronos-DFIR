@@ -1,0 +1,71 @@
+title: User Execution – Suspicious Process Launch from Download or Temp Paths
+id: c3d4e5f6-a1b2-4789-9cde-f01234567890
+status: stable
+description: |
+  Detects execution of processes from high-risk directories commonly used for initial payload
+  staging: Downloads, Temp, AppData, and Users\Public. Also flags suspicious extensions (.scr,
+  .pif) that masquerade as benign files. Prefetch evidence of first-time execution from these
+  paths is a strong indicator of user-initiated compromise via phishing or drive-by download.
+references:
+  - https://attack.mitre.org/techniques/T1204/
+  - https://attack.mitre.org/techniques/T1204/002/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.execution
+  - attack.t1204
+  - attack.t1204.002
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  downloads_exec:
+    Image|contains: '\Downloads\'
+  temp_exec:
+    Image|contains|any:
+      - '\Temp\'
+      - '\AppData\Local\Temp\'
+  public_exec:
+    Image|contains: '\Users\Public\'
+  suspicious_extension:
+    Image|endswith|any:
+      - '.scr'
+      - '.pif'
+      - '.com'
+      - '.hta'
+  lnk_unusual_path:
+    CommandLine|contains|any:
+      - '.lnk'
+      - '\Downloads\'
+      - '\Temp\'
+    Image|endswith|any:
+      - '\cmd.exe'
+      - '\powershell.exe'
+      - '\wscript.exe'
+      - '\cscript.exe'
+      - '\mshta.exe'
+  process_creation_evtid:
+    EventID|is_in:
+      - '4688'
+      - '1'
+  condition: (downloads_exec or temp_exec or public_exec or suspicious_extension or lnk_unusual_path) and process_creation_evtid
+falsepositives:
+  - Legitimate software installers downloaded by the user
+  - Browser-based application updates stored in Temp
+  - Developer tools unpacked to temporary directories
+level: medium
+fields:
+  - Image
+  - CommandLine
+  - ParentImage
+  - User
+  - EventID
+custom:
+  mitre_tactic: "TA0002 – Execution"
+  mitre_technique: "T1204 – User Execution"
+  windows_event_ids: ["4688", "1"]
+  investigation_note: |
+    Correlate with Prefetch files (C:\Windows\Prefetch) for first-execution timestamps.
+    Check parent process: explorer.exe → user double-click; outlook.exe → email attachment.
+    Look for concurrent file writes to the same directory from browser or email client processes.
+    Cross-reference with AV detection events around the same timeframe.

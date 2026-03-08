@@ -1,0 +1,75 @@
+title: LSASS Memory Dump / Credential Harvesting
+id: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+status: stable
+description: |
+  Detects attempts to dump LSASS process memory to harvest credentials.
+  Techniques include direct process access via task manager, ProcDump, Mimikatz,
+  comsvcs.dll MiniDump, and rundll32 abuse. Also detects suspicious handles
+  opened to lsass.exe by untrusted processes.
+references:
+  - https://attack.mitre.org/techniques/T1003/001/
+  - https://github.com/WithSecureLabs/chainsaw
+  - https://github.com/gentilkiwi/mimikatz
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/07
+tags:
+  - attack.credential_access
+  - attack.t1003.001
+  - chainsaw
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  procdump_lsass:
+    Image|endswith:
+      - '\procdump.exe'
+      - '\procdump64.exe'
+    CommandLine|contains: 'lsass'
+  comsvcs_minidump:
+    Image|endswith: '\rundll32.exe'
+    CommandLine|contains|all:
+      - 'comsvcs'
+      - 'MiniDump'
+  nanodump:
+    Image|endswith: '\nanodump.exe'
+  task_manager_dump:
+    Image|endswith: '\taskmgr.exe'
+    CommandLine|contains: 'lsass'
+  mimikatz_cli:
+    CommandLine|contains|any:
+      - 'sekurlsa::'
+      - 'lsadump::'
+      - 'privilege::debug'
+  lsass_handle_open:
+    EventID: '10'  # Sysmon ProcessAccess
+    TargetImage|endswith: '\lsass.exe'
+    GrantedAccess|contains|any:
+      - '0x1410'
+      - '0x1010'
+      - '0x1438'
+      - '0x143a'
+      - '0x1418'
+  event_log_4656:
+    EventID: '4656'
+    ObjectName|contains: 'lsass'
+    AccessMask|contains|any:
+      - '0x40'
+      - '0x1410'
+  condition: procdump_lsass or comsvcs_minidump or nanodump or task_manager_dump or mimikatz_cli or lsass_handle_open or event_log_4656
+falsepositives:
+  - Legitimate security tools (CrowdStrike Falcon, Carbon Black) reading LSASS
+  - Authorized vulnerability assessments / pentest engagements
+  - Windows Error Reporting creating crash dumps
+level: critical
+fields:
+  - Image
+  - CommandLine
+  - TargetImage
+  - GrantedAccess
+  - User
+  - ProcessId
+custom:
+  mitre_tactic: "TA0006 – Credential Access"
+  mitre_technique: "T1003.001 – OS Credential Dumping: LSASS Memory"
+  windows_event_ids: ["10", "4656", "4663", "4688"]
+  chainsaw_compatible: true

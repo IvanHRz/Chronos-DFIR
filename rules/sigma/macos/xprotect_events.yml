@@ -1,0 +1,76 @@
+title: macOS XProtect – Malware Detection and Bypass Events
+id: a5b6c7d8-2525-4a9b-b0c1-d2e3f4a5b6c7
+status: stable
+description: |
+  Detects macOS XProtect-related events including malware detections, signature update
+  failures, XProtect Remediator activity, and attempts to disable or bypass XProtect.
+  XProtect is Apple's built-in anti-malware that scans downloaded files and running
+  processes. Adversaries may attempt to disable it or manipulate its configuration.
+references:
+  - https://attack.mitre.org/techniques/T1562/001/
+  - https://support.apple.com/en-us/HT202491
+  - https://eclecticlight.co/2023/04/17/how-does-xprotect-work/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.defense_evasion
+  - attack.t1562.001
+  - platform.macos
+logsource:
+  category: process_creation
+  product: macos
+detection:
+  xprotect_detection:
+    Message|contains|any:
+      - 'XProtect'
+      - 'com.apple.xprotect'
+      - 'XProtectRemediator'
+    Message|contains|any:
+      - 'detected'
+      - 'blocked'
+      - 'quarantined'
+      - 'remediated'
+  xprotect_disable:
+    CommandLine|contains|any:
+      - 'com.apple.XProtect'
+      - 'XProtectPluginService'
+      - 'defaults write com.apple.xprotect'
+      - 'launchctl unload.*XProtect'
+      - 'launchctl bootout.*XProtect'
+  xprotect_plist_modification:
+    TargetFilename|contains|any:
+      - 'XProtect.bundle'
+      - 'XProtect.meta.plist'
+      - 'XProtect.yara'
+      - 'Gatekeeper.bundle'
+  mrt_activity:
+    Image|contains|any:
+      - 'MRT.app'
+      - 'MRTAgent'
+    Message|contains|any:
+      - 'found'
+      - 'removed'
+      - 'cleaned'
+  condition: xprotect_detection or xprotect_disable or xprotect_plist_modification or mrt_activity
+falsepositives:
+  - Normal XProtect signature updates
+  - XProtect Remediator performing routine scans
+  - Apple software updates modifying XProtect bundles
+level: high
+fields:
+  - Image
+  - CommandLine
+  - Message
+  - TargetFilename
+  - User
+  - Timestamp
+custom:
+  mitre_tactic: "TA0005 – Defense Evasion"
+  mitre_technique: "T1562.001 – Impair Defenses: Disable or Modify Tools"
+  chainsaw_compatible: false
+  investigation_note: |
+    XProtect signatures are stored in /Library/Apple/System/Library/CoreServices/
+    XProtect.bundle. XProtect Remediator runs periodically to scan for known malware.
+    Detections in the Unified Log (subsystem: com.apple.xprotect) are high-fidelity.
+    If XProtect service is being disabled via launchctl, this indicates an active
+    attacker attempting to evade detection before deploying malware.

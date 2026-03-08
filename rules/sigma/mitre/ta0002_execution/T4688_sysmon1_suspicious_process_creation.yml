@@ -1,0 +1,107 @@
+title: Suspicious Process Creation – Advanced Command Line Analysis
+id: c5d6e7f8-1515-4c9d-d0e1-f2a3b4c5d6e7
+status: stable
+description: |
+  Detects suspicious process creation patterns via Windows Event 4688 (with command
+  line auditing) or Sysmon Event 1, focusing on parent-child process anomalies,
+  suspicious command line patterns, and living-off-the-land binary abuse that goes
+  beyond simple encoded PowerShell detection.
+references:
+  - https://attack.mitre.org/techniques/T1059/
+  - https://attack.mitre.org/techniques/T1218/
+  - https://lolbas-project.github.io/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.execution
+  - attack.t1059
+  - attack.defense_evasion
+  - attack.t1218
+  - chainsaw
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  office_child_shell:
+    ParentImage|endswith|any:
+      - '\WINWORD.EXE'
+      - '\EXCEL.EXE'
+      - '\POWERPNT.EXE'
+      - '\OUTLOOK.EXE'
+      - '\MSACCESS.EXE'
+    Image|endswith|any:
+      - '\cmd.exe'
+      - '\powershell.exe'
+      - '\pwsh.exe'
+      - '\wscript.exe'
+      - '\cscript.exe'
+      - '\mshta.exe'
+      - '\certutil.exe'
+  suspicious_parent_child:
+    ParentImage|endswith|any:
+      - '\w3wp.exe'
+      - '\httpd.exe'
+      - '\nginx.exe'
+      - '\tomcat.exe'
+      - '\sqlservr.exe'
+    Image|endswith|any:
+      - '\cmd.exe'
+      - '\powershell.exe'
+      - '\whoami.exe'
+      - '\net.exe'
+      - '\net1.exe'
+      - '\systeminfo.exe'
+  double_extension:
+    CommandLine|contains|any:
+      - '.pdf.exe'
+      - '.doc.exe'
+      - '.jpg.exe'
+      - '.png.exe'
+      - '.txt.exe'
+      - '.xlsx.exe'
+  long_commandline:
+    CommandLine|contains|any:
+      - 'AAA'
+      - '4sIA'
+      - 'SUVY'
+      - 'SQBt'
+      - 'aWYg'
+      - 'aQBm'
+      - 'JABz'
+      - 'SQBFAF'
+      - 'cwBhA'
+  pipe_and_redirect:
+    CommandLine|contains|all:
+      - 'echo'
+      - '|'
+    CommandLine|contains|any:
+      - 'findstr'
+      - 'clip'
+      - 'certutil'
+  condition: office_child_shell or suspicious_parent_child or double_extension or long_commandline or pipe_and_redirect
+falsepositives:
+  - Legitimate Office macros that spawn command-line tools
+  - Web application CGI scripts on IIS servers
+  - Build automation systems
+level: high
+fields:
+  - Image
+  - CommandLine
+  - ParentImage
+  - ParentCommandLine
+  - User
+  - Computer
+  - ProcessId
+  - ParentProcessId
+  - IntegrityLevel
+custom:
+  mitre_tactic: "TA0002 – Execution"
+  mitre_technique: "T1059 – Command and Scripting Interpreter"
+  windows_event_ids: ["4688", "1"]
+  chainsaw_compatible: true
+  investigation_note: |
+    Office applications spawning shell processes (cmd, powershell) is a top indicator
+    of macro-based malware. Web servers spawning whoami/net/systeminfo indicates
+    webshell activity or RCE exploitation. Base64 fragments (AAA, 4sIA, etc.) in
+    command lines indicate encoded payloads. Correlate with Sysmon Event 11 (file
+    creation) for payloads dropped to disk after process execution.

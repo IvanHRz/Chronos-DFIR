@@ -1,0 +1,74 @@
+title: Linux Syslog – Service Anomalies and Log Tampering
+id: d2e3f4a5-2222-4d6e-e7f8-a9b0c1d2e3f4
+status: stable
+description: |
+  Detects suspicious patterns in Linux syslog/messages logs indicating service
+  manipulation, log tampering, and anti-forensic activity. Covers rsyslog/syslog-ng
+  service restarts, log file deletion or truncation, suspicious kernel messages,
+  and out-of-memory killer events that may indicate resource exhaustion attacks.
+references:
+  - https://attack.mitre.org/techniques/T1070/002/
+  - https://attack.mitre.org/techniques/T1562/001/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.defense_evasion
+  - attack.t1070.002
+  - attack.t1562.001
+  - platform.linux
+logsource:
+  category: syslog
+  product: linux
+detection:
+  log_service_restart:
+    Message|contains|any:
+      - 'rsyslogd.*start'
+      - 'syslog-ng starting'
+      - 'rsyslogd.*exiting'
+      - 'systemd-journald.*Rotating'
+  log_tampering:
+    Message|contains|any:
+      - 'File /var/log/'
+      - 'truncated'
+      - 'Log file was modified'
+      - 'wtmp begins'
+  suspicious_kernel:
+    Message|contains|any:
+      - 'segfault at'
+      - 'general protection fault'
+      - 'BUG: unable to handle kernel'
+      - 'loading out-of-tree module'
+      - 'module verification failed'
+  oom_killer:
+    Message|contains|any:
+      - 'Out of memory: Kill process'
+      - 'oom-kill:'
+      - 'invoked oom-killer'
+  ip_forwarding:
+    Message|contains|any:
+      - 'ip_forward'
+      - 'net.ipv4.ip_forward = 1'
+      - 'promiscuous mode'
+  condition: log_service_restart or log_tampering or suspicious_kernel or oom_killer or ip_forwarding
+falsepositives:
+  - Normal log rotation restarting rsyslog
+  - Legitimate kernel module loading
+  - Memory-intensive workloads triggering OOM killer
+level: medium
+fields:
+  - Message
+  - Facility
+  - Severity
+  - Hostname
+  - PID
+  - Timestamp
+custom:
+  mitre_tactic: "TA0005 – Defense Evasion"
+  mitre_technique: "T1070.002 – Indicator Removal: Clear Linux or Mac System Logs"
+  chainsaw_compatible: false
+  investigation_note: |
+    Unexpected rsyslog restarts may indicate an attacker restarting the service
+    to clear buffered logs. "wtmp begins" entries indicate the wtmp file was
+    truncated (anti-forensics). Unsigned kernel modules ("module verification
+    failed") may be rootkits. IP forwarding enablement suggests the host is
+    being used as a pivot point for lateral movement.

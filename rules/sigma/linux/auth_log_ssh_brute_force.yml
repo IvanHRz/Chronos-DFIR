@@ -1,0 +1,73 @@
+title: Linux Auth.log – SSH Brute Force and Suspicious Authentication
+id: e7f8a9b0-1717-4e1f-f2a3-b4c5d6e7f8a9
+status: stable
+description: |
+  Detects SSH brute force attempts and suspicious authentication patterns in Linux
+  auth.log / secure log. Covers failed password attempts, invalid user login attempts,
+  successful login after multiple failures, and SSH key-based authentication anomalies.
+  Also detects PAM module manipulation and authentication bypass attempts.
+references:
+  - https://attack.mitre.org/techniques/T1110/001/
+  - https://attack.mitre.org/techniques/T1021/004/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.credential_access
+  - attack.t1110.001
+  - attack.lateral_movement
+  - attack.t1021.004
+  - platform.linux
+logsource:
+  category: authentication
+  product: linux
+detection:
+  ssh_failed_password:
+    Message|contains|any:
+      - 'Failed password for'
+      - 'authentication failure'
+      - 'PAM: Authentication failure'
+  ssh_invalid_user:
+    Message|contains|any:
+      - 'Invalid user'
+      - 'illegal user'
+      - 'input_userauth_request: invalid user'
+  ssh_accepted_after_failures:
+    Message|contains: 'Accepted password for'
+  ssh_root_login:
+    Message|contains|any:
+      - 'Accepted password for root'
+      - 'Accepted publickey for root'
+      - 'session opened for user root'
+  ssh_reverse_tunnel:
+    Message|contains|any:
+      - 'remote port forwarding'
+      - 'GatewayPorts'
+      - 'channel.*open failed'
+  pam_manipulation:
+    Message|contains|any:
+      - 'pam_unix(sshd:auth)'
+      - 'pam_succeed_if'
+      - 'pam_permit'
+      - 'PAM adding faulty module'
+  condition: ssh_failed_password or ssh_invalid_user or ssh_root_login or ssh_reverse_tunnel or pam_manipulation
+falsepositives:
+  - Users mistyping passwords
+  - Automated scan tools probing default SSH ports
+  - Legitimate root access via SSH in environments that allow it
+level: medium
+fields:
+  - Message
+  - SourceIP
+  - User
+  - PID
+  - Timestamp
+  - Hostname
+custom:
+  mitre_tactic: "TA0006 – Credential Access"
+  mitre_technique: "T1110.001 – Brute Force: Password Guessing"
+  chainsaw_compatible: false
+  investigation_note: |
+    Correlate source IPs across failed attempts to identify spray patterns.
+    A successful login (Accepted) immediately after many failures from the same
+    IP indicates a successful brute force. Check authorized_keys for newly added
+    keys (persistence). Monitor for SSH reverse tunnels used for C2 communication.

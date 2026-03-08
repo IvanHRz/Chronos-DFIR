@@ -1,0 +1,80 @@
+title: Process Injection – Suspicious Memory Write and Remote Thread Creation
+id: a7b8c9d0-e1f2-3456-abcd-567890123456
+status: stable
+description: |
+  Detects process injection techniques including CreateRemoteThread, VirtualAllocEx,
+  WriteProcessMemory, and reflective DLL injection. These primitives are used by
+  Cobalt Strike, Metasploit, and custom implants to inject shellcode or DLLs into
+  legitimate host processes to evade AV and blend with normal activity.
+references:
+  - https://attack.mitre.org/techniques/T1055/
+  - https://github.com/WithSecureLabs/chainsaw
+  - https://github.com/sbousseaden/EVTX-ATTACK-SAMPLES
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/07
+tags:
+  - attack.defense_evasion
+  - attack.privilege_escalation
+  - attack.t1055
+  - chainsaw
+logsource:
+  product: windows
+detection:
+  sysmon_create_remote_thread:
+    EventID: '8'  # Sysmon CreateRemoteThread
+    TargetImage|endswith|any:
+      - '\svchost.exe'
+      - '\lsass.exe'
+      - '\explorer.exe'
+      - '\notepad.exe'
+      - '\mspaint.exe'
+      - '\winlogon.exe'
+      - '\csrss.exe'
+      - '\spoolsv.exe'
+  sysmon_process_access:
+    EventID: '10'  # Sysmon ProcessAccess
+    GrantedAccess|contains|any:
+      - '0x1F0FFF'
+      - '0x1F1FFF'
+      - '0x143A'
+      - '0x40'
+    TargetImage|endswith|any:
+      - '\svchost.exe'
+      - '\lsass.exe'
+      - '\explorer.exe'
+  mavinject_abuse:
+    Image|endswith: '\mavinject.exe'
+    CommandLine|contains: '/INJECTRUNNING'
+  meterpreter_parent:
+    ParentImage|endswith|any:
+      - '\word.exe'
+      - '\excel.exe'
+      - '\powerpnt.exe'
+      - '\outlook.exe'
+      - '\mshta.exe'
+    Image|endswith|any:
+      - '\powershell.exe'
+      - '\cmd.exe'
+      - '\wscript.exe'
+      - '\cscript.exe'
+  condition: sysmon_create_remote_thread or sysmon_process_access or mavinject_abuse or meterpreter_parent
+falsepositives:
+  - Legitimate security products performing process monitoring
+  - Debuggers and development tools (OllyDbg, WinDbg, x64dbg)
+  - AV/EDR products that monitor process memory
+level: high
+fields:
+  - SourceImage
+  - TargetImage
+  - StartAddress
+  - GrantedAccess
+  - Image
+  - CommandLine
+  - ParentImage
+  - User
+  - EventID
+custom:
+  mitre_tactic: "TA0005 – Defense Evasion / TA0004 – Privilege Escalation"
+  mitre_technique: "T1055 – Process Injection"
+  windows_event_ids: ["8", "10"]
+  chainsaw_compatible: true

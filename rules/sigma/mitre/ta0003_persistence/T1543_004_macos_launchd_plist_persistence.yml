@@ -1,0 +1,75 @@
+title: macOS LaunchDaemon/LaunchAgent Persistence via Suspicious Plist
+id: f3a9c2d1-b847-4e5f-9c21-ab3456789012
+status: stable
+description: |
+  Detects suspicious LaunchDaemon or LaunchAgent .plist files that exhibit
+  common persistence indicators: RunAtLoad=true combined with unusual
+  ProgramArguments (scripts, interpreters, network tools) or KeepAlive=true.
+  Maps to MITRE T1543.004 — Create or Modify System Process: Launch Daemon.
+references:
+  - https://attack.mitre.org/techniques/T1543/004/
+  - https://www.sentinelone.com/blog/how-malware-persists-on-macos/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/07
+tags:
+  - attack.persistence
+  - attack.t1543.004
+  - attack.privilege_escalation
+  - attack.t1548
+  - platform.macos
+logsource:
+  category: file
+  product: macos
+  # Chronos ingesta: ZIP de plists (/Library/LaunchDaemons/, /Library/LaunchAgents/)
+  # Campos esperados: EventID (Label), Destination_Entity (ProgramArguments),
+  #                   run_at_load, keep_alive, Source_File, full_path
+detection:
+  run_at_load_true:
+    run_at_load: "True"
+  suspicious_args:
+    Destination_Entity|contains|any:
+      - "/bin/sh"
+      - "/bin/bash"
+      - "/bin/zsh"
+      - "python"
+      - "python3"
+      - "ruby"
+      - "perl"
+      - "osascript"
+      - "curl "
+      - "wget "
+      - "nc "
+      - "ncat"
+      - "/tmp/"
+      - "/var/tmp/"
+      - ".sh "
+      - ".py "
+      - "LaunchDaemon"
+  suspicious_path:
+    full_path|contains|any:
+      - "/Library/LaunchDaemons/"
+      - "/Library/LaunchAgents/"
+      - "/Users/"
+  keep_alive_true:
+    keep_alive: "True"
+  condition: (run_at_load_true and suspicious_args) or (run_at_load_true and suspicious_path and keep_alive_true)
+falsepositives:
+  - Legitimate system management agents (e.g., MDM, Homebrew services)
+  - Developer tools that register LaunchAgents (e.g., Docker, MySQL)
+  - Review the Label (EventID) and full ProgramArguments before escalating
+level: high
+fields:
+  - EventID
+  - Destination_Entity
+  - run_at_load
+  - keep_alive
+  - Source_File
+  - full_path
+custom:
+  mitre_tactic: "TA0003 — Persistence"
+  mitre_technique: "T1543.004 — Launch Daemon"
+  chronos_artifact: "macOS/Bulk_Plist, macOS single .plist"
+  investigation_note: |
+    Correlate Label (EventID) con archivos en /Library/LaunchDaemons/ del host.
+    Verificar firma digital del binario referenciado en ProgramArguments.
+    Buscar en Unified Logs la ejecución del proceso correspondiente (launchd).

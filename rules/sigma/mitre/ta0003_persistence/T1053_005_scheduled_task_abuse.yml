@@ -1,0 +1,65 @@
+title: Scheduled Task Creation / Modification – Persistence and Execution
+id: c9d0e1f2-a3b4-5678-cdef-789012345678
+status: stable
+description: |
+  Detects attacker creation or modification of scheduled tasks for persistence
+  or privileged execution. Scheduled tasks running from temp directories, with
+  encoded PowerShell, or created by unusual parent processes are high-fidelity
+  indicators. Also covers schtasks.exe command-line patterns and Sysmon event 4698.
+references:
+  - https://attack.mitre.org/techniques/T1053/005/
+  - https://github.com/WithSecureLabs/chainsaw
+  - https://github.com/sbousseaden/EVTX-ATTACK-SAMPLES
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/07
+tags:
+  - attack.persistence
+  - attack.execution
+  - attack.t1053.005
+  - chainsaw
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  schtasks_create:
+    Image|endswith: '\schtasks.exe'
+    CommandLine|contains: '/create'
+  schtasks_suspicious_action:
+    Image|endswith: '\schtasks.exe'
+    CommandLine|contains|any:
+      - 'powershell'
+      - 'cmd.exe /c'
+      - 'wscript'
+      - 'cscript'
+      - 'mshta'
+      - 'regsvr32'
+      - 'rundll32'
+      - 'AppData'
+      - 'Temp'
+      - 'ProgramData'
+  task_created_event:
+    EventID: '4698'
+  task_modified_event:
+    EventID: '4702'
+  at_job_legacy:
+    Image|endswith: '\at.exe'
+  condition: schtasks_create or schtasks_suspicious_action or task_created_event or task_modified_event or at_job_legacy
+falsepositives:
+  - Windows Task Scheduler built-in system maintenance tasks
+  - Antivirus scheduled scans
+  - Software update schedulers
+  - Backup software automation
+level: medium
+fields:
+  - CommandLine
+  - Image
+  - TaskName
+  - TaskContent
+  - SubjectUserName
+  - User
+  - EventID
+custom:
+  mitre_tactic: "TA0003 – Persistence / TA0002 – Execution"
+  mitre_technique: "T1053.005 – Scheduled Task/Job: Scheduled Task"
+  windows_event_ids: ["4698", "4702", "4699", "4700", "4701"]
+  chainsaw_compatible: true

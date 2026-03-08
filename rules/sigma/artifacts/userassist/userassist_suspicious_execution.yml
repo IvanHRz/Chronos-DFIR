@@ -1,0 +1,82 @@
+title: UserAssist – Suspicious Program Execution via Explorer Shell
+id: d4e5f6a7-4004-4d8e-e9f0-a1b2c3d4e5f6
+status: stable
+description: |
+  Detects suspicious entries in the Windows UserAssist registry key (ROT13 encoded),
+  which records GUI-based program execution via Explorer. UserAssist tracks execution
+  count, last run time, and focus time — revealing interactive attacker activity that
+  other artifacts may miss. Entries for offensive tools, scripts from temp paths, or
+  rarely-used system utilities are high-value forensic indicators.
+references:
+  - https://attack.mitre.org/techniques/T1204/002/
+  - https://blog.didierstevens.com/programs/userassist/
+  - https://www.sans.org/blog/examining-the-userassist-key/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/08
+tags:
+  - attack.execution
+  - attack.t1204.002
+  - artifact.userassist
+logsource:
+  category: userassist
+  product: windows
+detection:
+  offensive_gui_tools:
+    ProgramName|contains|any:
+      - 'mimikatz'
+      - 'processhacker'
+      - 'procexp'
+      - 'x64dbg'
+      - 'ollydbg'
+      - 'immunity debugger'
+      - 'hxd'
+      - 'wireshark'
+      - 'nmap'
+      - 'advanced ip scanner'
+      - 'angry ip'
+      - 'putty'
+      - 'winscp'
+      - 'mobaxterm'
+      - 'rclone'
+      - 'veracrypt'
+      - 'truecrypt'
+      - 'tor browser'
+      - 'browser tor'
+  suspicious_script_exec:
+    ProgramName|endswith|any:
+      - '.hta'
+      - '.vbs'
+      - '.js'
+      - '.wsf'
+      - '.ps1'
+      - '.bat'
+      - '.cmd'
+  temp_path_execution:
+    ProgramName|contains|any:
+      - '\Temp\'
+      - '\AppData\Local\Temp\'
+      - '\Downloads\'
+      - '$Recycle.Bin'
+      - '\Users\Public\'
+  condition: offensive_gui_tools or suspicious_script_exec or temp_path_execution
+falsepositives:
+  - System administrators using legitimate remote access tools
+  - Developers using debugging tools during normal workflow
+  - Scripts executed from Downloads before being moved to proper location
+level: medium
+fields:
+  - ProgramName
+  - RunCount
+  - LastRunTime
+  - FocusTime
+  - FocusCount
+  - User
+custom:
+  mitre_tactic: "TA0002 – Execution"
+  mitre_technique: "T1204.002 – User Execution: Malicious File"
+  chainsaw_compatible: false
+  investigation_note: |
+    UserAssist values are ROT13 encoded in the raw registry — ensure your parser
+    has decoded them before analysis. FocusTime indicates how long the window was
+    in foreground (interactive use). High RunCount with low FocusTime may indicate
+    automated or scripted GUI interaction. Correlate with Prefetch for confirmation.
