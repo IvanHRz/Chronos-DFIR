@@ -1,0 +1,90 @@
+title: Suspicious Windows Services – Unusual Binary Paths
+id: f6a7b8c9-9006-4ebf-a2b3-c4d5e6f7a890
+status: stable
+description: |
+  Detects Windows services with binaries running from suspicious locations or with
+  characteristics indicative of malware persistence. Legitimate services typically
+  run from System32, Program Files, or vendor-specific directories. Services executing
+  from user profiles, temp directories, or with command-line interpreters (cmd.exe,
+  powershell.exe) as their binary path are strong indicators of persistence mechanisms
+  installed by attackers. This rule analyzes output from sc query, wmic service,
+  Get-Service, or Autoruns service entries.
+references:
+  - https://attack.mitre.org/techniques/T1543/003/
+  - https://attack.mitre.org/techniques/T1569/002/
+  - https://www.sans.org/blog/finding-malicious-services/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/09
+tags:
+  - attack.persistence
+  - attack.t1543.003
+  - attack.t1569.002
+  - artifact.services
+logsource:
+  category: service_creation
+  product: windows
+detection:
+  suspicious_binary_path:
+    BinaryPathName|contains|any:
+      - '\Temp\'
+      - '\tmp\'
+      - '\AppData\'
+      - '\Users\'
+      - '\Downloads\'
+      - '\Desktop\'
+      - '\Public\'
+      - '$Recycle.Bin'
+      - '\ProgramData\'
+      - '\perflogs\'
+      - '\Windows\Debug\'
+  interpreter_as_service:
+    BinaryPathName|contains|any:
+      - 'cmd.exe'
+      - 'cmd /c'
+      - 'powershell'
+      - 'pwsh'
+      - 'wscript'
+      - 'cscript'
+      - 'mshta'
+      - 'rundll32'
+      - 'regsvr32'
+      - 'certutil'
+  encoded_command:
+    BinaryPathName|contains|any:
+      - '-enc '
+      - '-EncodedCommand'
+      - '-e '
+      - 'FromBase64'
+      - 'hidden'
+      - '-windowstyle h'
+      - '-w hidden'
+      - '-nop'
+  suspicious_service_name:
+    ServiceName|contains|any:
+      - 'svc'
+      - 'update'
+      - 'helper'
+      - 'daemon'
+      - 'agent'
+    ServiceName|re: '^[a-z]{4,8}$'
+  condition: suspicious_binary_path or interpreter_as_service or encoded_command
+falsepositives:
+  - Legitimate third-party services installed per-user (Docker Desktop, some AV agents)
+  - Software update services that use PowerShell for maintenance tasks
+  - Enterprise management agents with generic service names
+level: medium
+fields:
+  - ServiceName
+  - DisplayName
+  - BinaryPathName
+  - StartType
+custom:
+  mitre_tactic: "TA0003 – Persistence"
+  mitre_technique: "T1543.003 – Windows Service"
+  investigation_note: |
+    For each flagged service, verify: (1) Is the binary signed? (2) When was the service
+    created relative to the incident timeline? (3) Does the service name match known
+    malware families? Check Event ID 7045 (Service Installed) in the System log for
+    creation timestamp and account context. Services using cmd.exe or powershell.exe
+    as their binary path are almost always malicious persistence mechanisms. Examine
+    the full command line for encoded payloads or download cradles.

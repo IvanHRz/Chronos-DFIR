@@ -1,14 +1,16 @@
-import ChronosState from './state.js?v=189';
-import events from './events.js?v=189';
+import ChronosState from './state.js?v=191';
+import events from './events.js?v=191';
 
 export class ChartManager {
     constructor() {
         this.charts = {
             timeline: null,
-            tactic: null,
+            categories: null,
+            sources: null,
             severity: null,
             topEvents: null,
             topProcesses: null,
+            topGeneric: null,
             severityTime: null
         };
         this.isLogScale = false;
@@ -46,7 +48,7 @@ export class ChartManager {
 
         events.on('STATE_RESET', () => {
             Object.values(this.charts).forEach(c => { if (c) c.destroy(); });
-            this.charts = { timeline: null, tactic: null, severity: null, topEvents: null, topProcesses: null, severityTime: null };
+            this.charts = { timeline: null, categories: null, sources: null, severity: null, topEvents: null, topProcesses: null, topGeneric: null, severityTime: null };
             // Hide all chart containers
             for (const id of ['chart-wrapper', 'distribution-row', 'analytics-row', 'severity-time-wrapper']) {
                 const el = document.getElementById(id);
@@ -184,29 +186,59 @@ export class ChartManager {
 
 
 
-    renderDistribution(ctxId, data, title) {
-        if (this.charts[ctxId]) this.charts[ctxId].destroy();
-
+    renderDistribution(chartKey, ctxId, data, title) {
+        if (this.charts[chartKey]) this.charts[chartKey].destroy();
         const canvas = document.getElementById(ctxId);
         if (!canvas) return;
 
-        const ctx = canvas.getContext('2d');
-        this.charts[ctxId] = new Chart(ctx, {
+        // Handle both formats: {key: count} dict or {labels, values} arrays
+        let labels, values;
+        if (Array.isArray(data.labels)) {
+            labels = data.labels;
+            values = data.values;
+        } else {
+            // Dict format {key: count} — sort descending, take top 8
+            const sorted = Object.entries(data).sort((a, b) => b[1] - a[1]).slice(0, 8);
+            labels = sorted.map(([k]) => k.length > 25 ? k.slice(0, 22) + '...' : k);
+            values = sorted.map(([, v]) => v);
+        }
+        if (!labels.length) return;
+
+        const total = values.reduce((a, b) => a + b, 0);
+        const palette = [
+            '#3b82f6', '#06b6d4', '#8b5cf6', '#f97316', '#22c55e',
+            '#ec4899', '#eab308', '#14b8a6', '#ef4444', '#64748b'
+        ];
+
+        this.charts[chartKey] = new Chart(canvas.getContext('2d'), {
             type: 'doughnut',
             data: {
-                labels: data.labels,
+                labels,
                 datasets: [{
-                    data: data.values,
-                    backgroundColor: [
-                        '#00d4ff', '#0055ff', '#ff0055', '#ffaa00', '#00ffaa'
-                    ]
+                    data: values,
+                    backgroundColor: palette.slice(0, labels.length),
+                    borderColor: '#1e293b',
+                    borderWidth: 2
                 }]
             },
             options: {
                 responsive: true,
+                maintainAspectRatio: false,
                 animation: { duration: 300 },
+                cutout: '55%',
                 plugins: {
-                    legend: { position: 'bottom', labels: { color: '#ccc' } }
+                    legend: {
+                        position: 'right',
+                        labels: { color: '#ccc', boxWidth: 10, padding: 6, font: { size: 11 } }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => {
+                                const pct = total > 0 ? ((ctx.raw / total) * 100).toFixed(1) : 0;
+                                return ` ${ctx.label}: ${ctx.raw.toLocaleString()} (${pct}%)`;
+                            }
+                        }
+                    }
                 }
             }
         });
@@ -410,40 +442,60 @@ export class ChartManager {
 
         // --- Distribution Charts (Doughnuts) ---
         if (data.distributions) {
-            const hasDistributions = data.distributions.tactics || data.distributions.severity;
-            if (hasDistributions) {
+            const dist = data.distributions;
+            const hasDoughnuts = dist.categories || dist.sources || dist.severity;
+            if (hasDoughnuts) {
                 const distRow = document.getElementById('distribution-row');
                 if (distRow) distRow.style.display = 'flex';
             }
-            if (data.distributions.tactics) {
-                this.renderDistribution('tactic-chart', data.distributions.tactics, 'Tactic Distribution');
+
+            // Event Categories doughnut (TaskCategory, Category, etc.)
+            const catTitle = dist.category_column || 'Event Categories';
+            if (dist.categories) {
+                this.renderDistribution('categories', 'category-chart', dist.categories, catTitle);
             }
-            if (data.distributions.severity) {
-                this.renderDistribution('severity-chart', data.distributions.severity, 'Severity Distribution');
+
+            // Source Distribution doughnut (Provider, Computer, User, etc.)
+            const srcTitle = dist.source_column || 'Sources';
+            if (dist.sources) {
+                this.renderDistribution('sources', 'source-chart', dist.sources, srcTitle);
+            }
+
+            // Severity doughnut (fallback if no categories/sources)
+            if (dist.severity && !dist.categories && !dist.sources) {
+                this.renderDistribution('severity', 'category-chart', dist.severity, 'Severity');
             }
 
             // --- Top EventIDs (horizontal bar) ---
-            if (data.distributions.top_events) {
+            if (dist.top_events) {
                 const row = document.getElementById('analytics-row');
                 if (row) row.style.display = 'flex';
                 this.renderHorizontalBar('topEvents', 'top-events-chart',
-                    data.distributions.top_events, 'Top Event IDs');
+                    dist.top_events, 'Top Event IDs');
             }
 
             // --- Top Processes (horizontal bar) ---
-            if (data.distributions.top_processes) {
+            if (dist.top_processes) {
                 const row = document.getElementById('analytics-row');
                 if (row) row.style.display = 'flex';
                 this.renderHorizontalBar('topProcesses', 'top-processes-chart',
-                    data.distributions.top_processes, 'Top Processes');
+                    dist.top_processes, 'Top Processes');
+            }
+
+            // --- Top Generic (fallback for files with no events/processes) ---
+            if (dist.top_generic && !dist.top_events && !dist.top_processes) {
+                const row = document.getElementById('analytics-row');
+                if (row) row.style.display = 'flex';
+                const genTitle = dist.top_generic_column || 'Top Values';
+                this.renderHorizontalBar('topGeneric', 'top-events-chart',
+                    dist.top_generic, genTitle);
             }
 
             // --- Severity Over Time (stacked bar) ---
-            if (!isNoTimeline && data.distributions.severity_over_time) {
+            if (!isNoTimeline && dist.severity_over_time) {
                 const wrapper = document.getElementById('severity-time-wrapper');
                 if (wrapper) wrapper.style.display = 'block';
-                this.renderStackedTimeline('severity-time-chart',
-                    data.distributions.severity_over_time);
+                this.renderStackedTimeline('severity-time-chart', dist.severity_over_time);
             }
         }
 
@@ -464,7 +516,6 @@ export class ChartManager {
         const epsEl = document.getElementById('dash-eps');
         if (epsEl) {
             let epsVal = stats.eps != null ? stats.eps : 0;
-            // Fallback: compute from timestamps if eps is 0 and we have time bounds
             if (!epsVal && stats.start_time && stats.end_time && stats.total_events > 0) {
                 const durSec = (new Date(stats.end_time) - new Date(stats.start_time)) / 1000;
                 if (durSec > 0) epsVal = (stats.total_events / durSec).toFixed(4);
@@ -472,13 +523,14 @@ export class ChartManager {
             epsEl.textContent = epsVal || '0';
         }
 
-
-        // Top tactic from distributions
+        // Top category from distributions
         const tacticEl = document.getElementById('dash-tactic');
-        if (tacticEl && data.distributions?.tactics) {
-            const sorted = Object.entries(data.distributions.tactics)
-                .sort((a, b) => b[1] - a[1]);
-            tacticEl.textContent = sorted.length ? sorted[0][0] : 'N/A';
+        if (tacticEl) {
+            const catData = data.distributions?.categories || data.distributions?.severity;
+            if (catData) {
+                const sorted = Object.entries(catData).sort((a, b) => b[1] - a[1]);
+                tacticEl.textContent = sorted.length ? sorted[0][0] : 'N/A';
+            }
         }
 
         // Risk level from smart risk engine or fallback to severity
@@ -492,7 +544,6 @@ export class ChartManager {
                 const entries = Object.entries(data.distributions.severity);
                 const high = entries.filter(([k]) => /high|crit/i.test(k)).reduce((s, [, v]) => s + v, 0);
                 const medium = entries.filter(([k]) => /med/i.test(k)).reduce((s, [, v]) => s + v, 0);
-
                 if (high > 0) {
                     riskEl.textContent = 'High';
                     riskEl.style.color = '#ff4d4d';

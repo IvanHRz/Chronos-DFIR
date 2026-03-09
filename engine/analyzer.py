@@ -4,18 +4,103 @@ Generates chart data, trend analysis, and distribution breakdowns.
 """
 import logging
 import traceback
+import re
 import polars as pl
 from engine.forensic import TIME_HIERARCHY, get_primary_time_column
 
 logger = logging.getLogger("Chronos-DFIR")
 
 # Shared: sentinel values to filter out of Top-N charts
-_MEANINGLESS = {"null", "none", "n/a", "-", "", "nan", "undefined", "unknown", "0"}
-import re
+_MEANINGLESS = {"null", "none", "n/a", "-", "", "nan", "undefined", "unknown", "0",
+                "system", "(null)", "<null>", "not available"}
 _PURE_NUMERIC = re.compile(r"^\d{1,5}$")
 
+# Windows Event ID descriptions for enriched chart labels
+_KNOWN_EVENT_IDS = {
+    "1": "Process Create (Sysmon)",
+    "2": "File Creation Time (Sysmon)",
+    "3": "Network Connection (Sysmon)",
+    "4": "Sysmon Service State",
+    "5": "Process Terminated (Sysmon)",
+    "6": "Driver Loaded (Sysmon)",
+    "7": "Image Loaded (Sysmon)",
+    "8": "CreateRemoteThread (Sysmon)",
+    "10": "Process Access (Sysmon)",
+    "11": "File Created (Sysmon)",
+    "12": "Registry Event (Sysmon)",
+    "13": "Registry Value Set (Sysmon)",
+    "15": "FileCreateStreamHash (Sysmon)",
+    "17": "Pipe Created (Sysmon)",
+    "22": "DNS Query (Sysmon)",
+    "23": "File Delete (Sysmon)",
+    "25": "Process Tampering (Sysmon)",
+    "26": "File Delete Logged (Sysmon)",
+    "104": "System Log Cleared",
+    "1024": "RDP Connection Attempt",
+    "1025": "RDP Connection Success",
+    "1026": "RDP Disconnection",
+    "1102": "Security Log Cleared",
+    "4104": "PowerShell ScriptBlock",
+    "4624": "Logon Success",
+    "4625": "Logon Failure",
+    "4634": "Logoff",
+    "4648": "Explicit Logon",
+    "4656": "Object Handle Requested",
+    "4662": "Directory Service Access",
+    "4663": "Object Access Attempt",
+    "4672": "Admin Privileges Assigned",
+    "4673": "Privileged Service Called",
+    "4688": "Process Created",
+    "4689": "Process Terminated",
+    "4697": "Service Installed",
+    "4698": "Scheduled Task Created",
+    "4699": "Scheduled Task Deleted",
+    "4700": "Scheduled Task Enabled",
+    "4702": "Scheduled Task Updated",
+    "4720": "User Account Created",
+    "4722": "User Account Enabled",
+    "4724": "Password Reset Attempt",
+    "4728": "Member Added to Global Group",
+    "4732": "Member Added to Local Group",
+    "4738": "User Account Changed",
+    "4740": "Account Locked Out",
+    "4756": "Member Added to Universal Group",
+    "4768": "Kerberos TGT Requested",
+    "4769": "Kerberos Service Ticket",
+    "4771": "Kerberos Pre-Auth Failed",
+    "4776": "NTLM Authentication",
+    "4798": "User Local Group Enumerated",
+    "4799": "Security Group Enumerated",
+    "5136": "Directory Object Modified",
+    "5140": "Network Share Accessed",
+    "5145": "Network Share Check",
+    "5156": "Firewall Connection Allowed",
+    "5157": "Firewall Connection Blocked",
+    "7036": "Service State Changed",
+    "7040": "Service Start Type Changed",
+    "7045": "New Service Installed",
+    "8004": "NTLM Authentication (DC)",
+    "11707": "Software Install Success",
+    "11724": "Software Uninstall Success",
+}
 
-def _compute_top_distribution(lf, col_name, top_n=10, filter_numeric=False):
+# Source column candidates for source distribution chart
+_SOURCE_CANDIDATES = [
+    "SourceName", "Provider", "Provider_Name", "ProviderName",
+    "Computer", "ComputerName", "MachineName", "Hostname",
+    "Channel", "LogName",
+    "SubjectUserName", "TargetUserName", "User",
+]
+
+# Category column candidates (replaces "tactic" for non-MITRE data)
+_CATEGORY_CANDIDATES = [
+    "Chronos_Tactic", "MITRE_Tactic", "Tactic", "ViolationCategory",
+    "ViolationType", "Protection", "EventName", "TaskCategory",
+    "Category", "Title",
+]
+
+
+def _compute_top_distribution(lf, col_name, top_n=10, filter_numeric=False, enrich_event_ids=False):
     """Compute top-N distribution for a column. Returns {labels, values} or None."""
     try:
         schema_names = lf.collect_schema().names()
@@ -37,7 +122,13 @@ def _compute_top_distribution(lf, col_name, top_n=10, filter_numeric=False):
                 continue
             if filter_numeric and _PURE_NUMERIC.match(val):
                 continue
-            labels.append(val if len(val) <= 50 else val[:47] + "...")
+            # Enrich Event IDs with human-readable descriptions
+            if enrich_event_ids:
+                desc = _KNOWN_EVENT_IDS.get(val)
+                label = f"{val} — {desc}" if desc else val
+            else:
+                label = val if len(val) <= 50 else val[:47] + "..."
+            labels.append(label)
             values.append(row["count"])
             if len(labels) >= top_n:
                 break
@@ -47,7 +138,22 @@ def _compute_top_distribution(lf, col_name, top_n=10, filter_numeric=False):
         return None
 
 
-def _compute_non_temporal(df_source, cols, eventid_col, proc_col, level_col, tactic_col, tactic_candidates):
+def _detect_columns(cols):
+    """Detect standard forensic columns. Returns dict of detected column names."""
+    detected = {}
+    detected["level"] = next((c for c in cols if c.lower() in [
+        'level', 'severity', 'riskscore', 'risk']), None)
+    detected["eventid"] = next((c for c in cols if c.lower() in [
+        'eventid', 'event_id', 'wineventid']), None)
+    detected["process"] = next((c for c in cols if c.lower() in [
+        'processname', 'image', 'process', 'newprocessname', 'parentimage',
+        'sourceimage', 'targetimage', 'application']), None)
+    detected["category"] = next((c for c in cols if c in _CATEGORY_CANDIDATES), None)
+    detected["source"] = next((c for c in cols if c in _SOURCE_CANDIDATES), None)
+    return detected
+
+
+def _compute_non_temporal(df_source, cols, detected):
     """Generate chart data for files without timestamps (Top-N charts only)."""
     is_lazy = isinstance(df_source, pl.LazyFrame)
     lf = df_source if is_lazy else df_source.lazy()
@@ -56,11 +162,76 @@ def _compute_non_temporal(df_source, cols, eventid_col, proc_col, level_col, tac
     except Exception:
         total = 0
 
-    distributions = {}
+    distributions = _compute_distributions(lf, cols, detected, labels=None, bucketed_df=None, bucket=None)
 
-    # Top EventIDs
+    return {
+        "labels": [], "datasets": [],
+        "no_timeline": True,
+        "interpretation": "No timeline available — showing frequency analysis.",
+        "distributions": distributions,
+        "stats": {"total_events": total, "eps": 0}
+    }
+
+
+def _compute_distributions(lf, cols, detected, labels=None, bucketed_df=None, bucket=None):
+    """Compute all distribution charts from a LazyFrame."""
+    distributions = {}
+    eventid_col = detected.get("eventid")
+    proc_col = detected.get("process")
+    level_col = detected.get("level")
+    category_col = detected.get("category")
+    source_col = detected.get("source")
+
+    schema_names = lf.collect_schema().names()
+
+    # Category distribution (formerly "tactics" — now shows actual column data)
+    if category_col and category_col in schema_names:
+        try:
+            cat_counts = lf.group_by(category_col).agg(pl.len().alias("count")).collect()
+            raw = dict(zip(
+                cat_counts[category_col].cast(pl.Utf8, strict=False).fill_null("N/A").to_list(),
+                cat_counts["count"].to_list()
+            ))
+            # Filter meaningless entries
+            filtered = {k: v for k, v in raw.items() if k.lower().strip() not in _MEANINGLESS}
+            if filtered:
+                distributions["categories"] = filtered
+                distributions["category_column"] = category_col
+        except Exception as _ce:
+            logger.warning(f"Category distribution failed: {_ce}")
+
+    # Source distribution (Computer, Provider, User, etc.)
+    if source_col and source_col in schema_names:
+        try:
+            src_counts = lf.group_by(source_col).agg(pl.len().alias("count")).collect()
+            raw = dict(zip(
+                src_counts[source_col].cast(pl.Utf8, strict=False).fill_null("N/A").to_list(),
+                src_counts["count"].to_list()
+            ))
+            filtered = {k: v for k, v in raw.items() if k.lower().strip() not in _MEANINGLESS}
+            if filtered:
+                distributions["sources"] = filtered
+                distributions["source_column"] = source_col
+        except Exception as _se:
+            logger.warning(f"Source distribution failed: {_se}")
+
+    # Severity distribution
+    if level_col and level_col in schema_names:
+        try:
+            sev_counts = lf.group_by(level_col).agg(pl.len().alias("count")).collect()
+            raw = dict(zip(
+                sev_counts[level_col].cast(pl.Utf8, strict=False).fill_null("N/A").to_list(),
+                sev_counts["count"].to_list()
+            ))
+            filtered = {k: v for k, v in raw.items() if k.lower().strip() not in _MEANINGLESS}
+            if filtered:
+                distributions["severity"] = filtered
+        except Exception:
+            pass
+
+    # Top EventIDs with enriched labels
     if eventid_col:
-        top_ev = _compute_top_distribution(lf, eventid_col, top_n=10)
+        top_ev = _compute_top_distribution(lf, eventid_col, top_n=10, enrich_event_ids=True)
         if top_ev:
             distributions["top_events"] = top_ev
 
@@ -70,43 +241,50 @@ def _compute_non_temporal(df_source, cols, eventid_col, proc_col, level_col, tac
         if top_proc:
             distributions["top_processes"] = top_proc
 
-    # Tactic distribution
-    _tc = tactic_col or next((c for c in cols if c in tactic_candidates), None)
-    if _tc:
+    # Severity Over Time (stacked bar data) — only when timeline exists
+    if level_col and level_col in schema_names and labels and bucketed_df is not None and bucket:
         try:
-            tc_df = lf.group_by(_tc).agg(pl.len().alias("count")).collect()
-            distributions["tactics"] = dict(zip(
-                tc_df[_tc].cast(pl.Utf8, strict=False).to_list(),
-                tc_df["count"].to_list()
-            ))
-        except Exception:
-            pass
+            sot_df = (lf
+                      .with_columns(pl.col("ts").dt.truncate(bucket).alias("_bucket"))
+                      .group_by(["_bucket", level_col])
+                      .agg(pl.len().alias("cnt"))
+                      .sort("_bucket")
+                      .collect())
+            bucket_labels = bucketed_df["_bucket"].to_list()
+            sev_levels = sot_df[level_col].cast(pl.Utf8, strict=False).fill_null("N/A").unique().to_list()
+            series = {}
+            for lvl in sev_levels:
+                lvl_data = sot_df.filter(pl.col(level_col).cast(pl.Utf8, strict=False).fill_null("N/A") == lvl)
+                lvl_buckets = lvl_data["_bucket"].to_list()
+                lvl_counts = lvl_data["cnt"].to_list()
+                bucket_map = dict(zip(lvl_buckets, lvl_counts))
+                series[lvl] = [bucket_map.get(b, 0) for b in bucket_labels]
+            distributions["severity_over_time"] = {"labels": labels, "series": series}
+        except Exception as _sot_e:
+            logger.warning(f"Severity over time failed: {_sot_e}")
 
-    # Severity distribution
-    if level_col and level_col in cols:
-        try:
-            sv_df = lf.group_by(level_col).agg(pl.len().alias("count")).collect()
-            distributions["severity"] = dict(zip(
-                sv_df[level_col].cast(pl.Utf8, strict=False).fill_null("N/A").to_list(),
-                sv_df["count"].to_list()
-            ))
-        except Exception:
-            pass
+    # Auto-detect top column for files with few known columns
+    if not distributions.get("top_events") and not distributions.get("top_processes"):
+        # Find the most interesting column (highest cardinality but < total rows)
+        for c in cols:
+            if c.startswith("_") or c.lower() in {"no.", "no", "row_number"}:
+                continue
+            if c in schema_names:
+                top = _compute_top_distribution(lf, c, top_n=10, filter_numeric=True)
+                if top and len(top["labels"]) >= 3:
+                    distributions["top_generic"] = top
+                    distributions["top_generic_column"] = c
+                    break
 
-    # Smart Risk
+    # Smart Risk Engine
     try:
         from engine.forensic import calculate_smart_risk_m4
-        distributions["smart_risk"] = calculate_smart_risk_m4(lf)
-    except Exception:
-        pass
+        smart_risk = calculate_smart_risk_m4(lf)
+        distributions["smart_risk"] = smart_risk
+    except Exception as sre_e:
+        logger.warning(f"Smart Risk Engine failed: {sre_e}")
 
-    return {
-        "labels": [], "datasets": [],
-        "no_timeline": True,
-        "interpretation": "No timeline available — showing frequency analysis.",
-        "distributions": distributions,
-        "stats": {"total_events": total, "eps": 0}
-    }
+    return distributions
 
 
 def analyze_dataframe(df_source, target_bars=50, start_time: str = None, end_time: str = None):
@@ -119,6 +297,9 @@ def analyze_dataframe(df_source, target_bars=50, start_time: str = None, end_tim
         is_lazy = isinstance(df_source, pl.LazyFrame)
         cols = df_source.collect_schema().names() if is_lazy else df_source.columns
 
+        # Detect standard forensic columns
+        detected = _detect_columns(cols)
+
         # 1. Parsing Time - Prioritized Search using Global Hierarchy
         existing_cols = set(cols)
         found_hierarchy = [c for c in TIME_HIERARCHY if c in existing_cols]
@@ -128,34 +309,17 @@ def analyze_dataframe(df_source, target_bars=50, start_time: str = None, end_tim
         time_col = get_primary_time_column(cols)
 
         if not found_hierarchy and not time_col:
-            logger.warning(f"No time column found. Computing non-temporal distributions.")
-            return _compute_non_temporal(df_source, cols, eventid_col, proc_col,
-                                         level_col, _tactic_col_source, tactic_candidates)
+            logger.warning("No time column found. Computing non-temporal distributions.")
+            return _compute_non_temporal(df_source, cols, detected)
 
         logger.info(f"Analyzing time context. Hierarchy found: {found_hierarchy}")
 
         # Optimization: Only select necessary columns
         keep_cols = list(set(found_hierarchy + ([time_col] if time_col else [])))
-        level_col = next((c for c in cols if c.lower() in ['level', 'severity', 'riskscore', 'risk']), None)
-        if level_col:
-            keep_cols.append(level_col)
-        eventid_col = next((c for c in cols if c.lower() in ['eventid', 'event_id', 'wineventid']), None)
-        if eventid_col:
-            keep_cols.append(eventid_col)
-
-        # Process column detection for Top Processes chart
-        proc_col = next((c for c in cols if c.lower() in [
-            'processname', 'image', 'process', 'newprocessname', 'parentimage',
-            'sourceimage', 'targetimage', 'application'
-        ]), None)
-        if proc_col:
-            keep_cols.append(proc_col)
-
-        tactic_candidates = ["Chronos_Tactic", "MITRE_Tactic", "Tactic", "ViolationCategory",
-                             "ViolationType", "Protection", "Title", "EventName", "TaskCategory", "Category"]
-        _tactic_col_source = next((c for c in cols if c in tactic_candidates), None)
-        if _tactic_col_source:
-            keep_cols.append(_tactic_col_source)
+        for key in ["level", "eventid", "process", "category", "source"]:
+            col = detected.get(key)
+            if col:
+                keep_cols.append(col)
 
         q_base = df_source.lazy().select(list(set(keep_cols)))
 
@@ -258,8 +422,10 @@ def analyze_dataframe(df_source, target_bars=50, start_time: str = None, end_tim
         top_talker_id = None
         top_talker_pct = 0.0
         duration = (view_max - view_min).total_seconds() if (view_min and view_max) else 0
+        bucketed_df = None
+        bucket = "1h"
 
-        # Timeline Chart — Adaptive bucketing
+        # Timeline Chart — Adaptive bucketing (DO NOT MODIFY — user confirmed this chart is good)
         try:
             if duration <= 0:
                 bucket = "1h"
@@ -300,69 +466,11 @@ def analyze_dataframe(df_source, target_bars=50, start_time: str = None, end_tim
             logger.error(f"Timeline bucketing failed: {e}")
             traceback.print_exc()
 
-        # Tactic & Severity Distribution
-        distributions = {}
-        _tactic_col = next((c for c in q_filtered.collect_schema().names() if c in tactic_candidates), None)
-
-        if _tactic_col:
-            try:
-                tactic_counts = q_filtered.group_by(_tactic_col).agg(pl.len().alias("count")).collect()
-                distributions["tactics"] = dict(zip(
-                    tactic_counts[_tactic_col].cast(pl.Utf8, strict=False).to_list(),
-                    tactic_counts["count"].to_list()
-                ))
-            except Exception as _te:
-                logger.warning(f"Tactics distribution failed: {_te}")
-
-        if level_col and level_col in q_filtered.collect_schema().names():
-            sev_counts = q_filtered.group_by(level_col).agg(pl.len().alias("count")).collect()
-            distributions["severity"] = dict(zip(
-                sev_counts[level_col].cast(pl.Utf8, strict=False).fill_null("N/A").to_list(),
-                sev_counts["count"].to_list()
-            ))
-
-        # Top EventIDs distribution
-        if eventid_col:
-            top_ev = _compute_top_distribution(q_filtered, eventid_col, top_n=10)
-            if top_ev:
-                distributions["top_events"] = top_ev
-
-        # Top Processes distribution
-        if proc_col:
-            top_proc = _compute_top_distribution(q_filtered, proc_col, top_n=8, filter_numeric=True)
-            if top_proc:
-                distributions["top_processes"] = top_proc
-
-        # Severity Over Time (stacked bar data)
-        if level_col and level_col in q_filtered.collect_schema().names() and labels:
-            try:
-                sot_df = (q_filtered
-                          .with_columns(pl.col("ts").dt.truncate(bucket).alias("_bucket"))
-                          .group_by(["_bucket", level_col])
-                          .agg(pl.len().alias("cnt"))
-                          .sort("_bucket")
-                          .collect())
-                # Pivot into {labels, series: {level: [counts aligned to labels]}}
-                bucket_labels = bucketed_df["_bucket"].to_list()  # reuse from timeline
-                sev_levels = sot_df[level_col].cast(pl.Utf8, strict=False).fill_null("N/A").unique().to_list()
-                series = {}
-                for lvl in sev_levels:
-                    lvl_data = sot_df.filter(pl.col(level_col).cast(pl.Utf8, strict=False).fill_null("N/A") == lvl)
-                    lvl_buckets = lvl_data["_bucket"].to_list()
-                    lvl_counts = lvl_data["cnt"].to_list()
-                    bucket_map = dict(zip(lvl_buckets, lvl_counts))
-                    series[lvl] = [bucket_map.get(b, 0) for b in bucket_labels]
-                distributions["severity_over_time"] = {"labels": labels, "series": series}
-            except Exception as _sot_e:
-                logger.warning(f"Severity over time failed: {_sot_e}")
-
-        # Smart Risk Engine
-        try:
-            from engine.forensic import calculate_smart_risk_m4
-            smart_risk = calculate_smart_risk_m4(q_filtered)
-            distributions["smart_risk"] = smart_risk
-        except Exception as sre_e:
-            logger.warning(f"Smart Risk Engine failed: {sre_e}")
+        # All distributions via shared function
+        distributions = _compute_distributions(
+            q_filtered, cols, detected,
+            labels=labels, bucketed_df=bucketed_df, bucket=bucket
+        )
 
         return {
             "labels": labels,

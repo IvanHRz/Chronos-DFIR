@@ -182,6 +182,131 @@ def normalize_and_save(lf, df_eager, dest_path: str) -> int:
 
 # ─── Private parsers ────────────────────────────────────────────────
 
+def _detect_txt_format(lines: list) -> tuple:
+    """Detect common forensic TXT formats from first ~50 lines.
+    Returns (format_name, header_line_idx) or (None, None)."""
+    for i, line in enumerate(lines[:50]):
+        s = line.strip()
+        if not s:
+            continue
+        sl = s.lower()
+        # Windows netstat -ano
+        if re.match(r'^\s*(proto|tcp|udp)\s+(local\s+address|[\d\.\*:]+)', sl):
+            return "netstat", i if "proto" in sl else max(0, i - 1)
+        # Windows tasklist
+        if "image name" in sl and "pid" in sl and "mem" in sl:
+            return "tasklist", i
+        # Linux ps aux
+        if sl.startswith("user") and "pid" in sl and ("%cpu" in sl or "cpu" in sl):
+            return "ps_aux", i
+        # Windows sc query / services
+        if "service_name" in sl or (s.startswith("SERVICE_NAME:") or s.startswith("DISPLAY_NAME:")):
+            return "sc_query", i
+        # arp -a (Windows/Linux)
+        if ("internet" in sl and "physical" in sl) or re.match(r'^\?\s*\([\d\.]+\)', s):
+            return "arp", i if "internet" in sl else max(0, i - 1)
+        # Windows systeminfo key: value
+        if re.match(r'^(Host Name|OS Name|OS Version|System Type|Domain)\s*:', s):
+            return "systeminfo", i
+        # Windows route print
+        if "network destination" in sl and "netmask" in sl:
+            return "route_print", i
+        # Windows ipconfig
+        if re.match(r'^(Windows IP Configuration|Ethernet adapter|Wireless)', s):
+            return "ipconfig", i
+        # schtasks /query
+        if "taskname" in sl and ("next run time" in sl or "status" in sl):
+            return "schtasks", i
+        # autoruns / startup items
+        if ("entry" in sl or "image path" in sl) and ("launch" in sl or "location" in sl):
+            return "autoruns", i
+    return None, None
+
+
+def _parse_netstat(lines: list, header_idx: int) -> pl.DataFrame:
+    """Parse netstat -ano output into structured DataFrame."""
+    records = []
+    for line in lines[header_idx:]:
+        s = line.strip()
+        if not s or s.lower().startswith("active") or s.lower().startswith("proto"):
+            continue
+        parts = s.split()
+        if len(parts) >= 4 and parts[0].upper() in ("TCP", "UDP"):
+            rec = {
+                "Proto": parts[0].upper(),
+                "LocalAddress": parts[1],
+                "ForeignAddress": parts[2] if len(parts) > 2 else "",
+                "State": parts[3] if parts[0].upper() == "TCP" and len(parts) > 3 else "",
+                "PID": parts[-1] if parts[-1].isdigit() else "",
+            }
+            # Extract port for analysis
+            if ":" in rec["LocalAddress"]:
+                rec["LocalPort"] = rec["LocalAddress"].rsplit(":", 1)[-1]
+            if ":" in rec["ForeignAddress"]:
+                rec["ForeignPort"] = rec["ForeignAddress"].rsplit(":", 1)[-1]
+            rec["EventID"] = "Netstat_Connection"
+            records.append(rec)
+    return pl.DataFrame(records) if records else pl.DataFrame()
+
+
+def _parse_sc_query(lines: list) -> pl.DataFrame:
+    """Parse sc query output into structured DataFrame."""
+    records = []
+    current = {}
+    for line in lines:
+        s = line.strip()
+        if not s:
+            if current:
+                current["EventID"] = "Windows_Service"
+                records.append(current)
+                current = {}
+            continue
+        if ":" in s:
+            key, _, val = s.partition(":")
+            key = key.strip().replace(" ", "_").upper()
+            val = val.strip()
+            if key in ("SERVICE_NAME", "DISPLAY_NAME", "STATE", "TYPE",
+                       "START_TYPE", "BINARY_PATH_NAME", "SERVICE_START_NAME"):
+                current[key] = val
+    if current:
+        current["EventID"] = "Windows_Service"
+        records.append(current)
+    return pl.DataFrame(records) if records else pl.DataFrame()
+
+
+def _parse_systeminfo(lines: list) -> pl.DataFrame:
+    """Parse systeminfo output into key-value DataFrame."""
+    records = []
+    for line in lines:
+        s = line.strip()
+        if not s or ":" not in s:
+            continue
+        key, _, val = s.partition(":")
+        key = key.strip()
+        val = val.strip()
+        if key and val:
+            records.append({"Property": key, "Value": val, "EventID": "SystemInfo"})
+    return pl.DataFrame(records) if records else pl.DataFrame()
+
+
+def _parse_schtasks(lines: list, header_idx: int) -> pl.DataFrame:
+    """Parse schtasks /query output."""
+    records = []
+    for line in lines[header_idx:]:
+        s = line.strip()
+        if not s or s.startswith("=") or s.startswith("-") or "taskname" in s.lower():
+            continue
+        parts = re.split(r'\s{2,}', s)
+        if len(parts) >= 2:
+            rec = {"TaskName": parts[0], "EventID": "Scheduled_Task"}
+            if len(parts) > 1:
+                rec["NextRunTime"] = parts[1]
+            if len(parts) > 2:
+                rec["Status"] = parts[2]
+            records.append(rec)
+    return pl.DataFrame(records) if records else pl.DataFrame()
+
+
 def _parse_text_file(file_path: str, ext: str) -> tuple:
     """Parse .txt, .log, .pslist files. Returns (df_eager, file_cat)."""
     file_cat = "generic"
@@ -209,6 +334,67 @@ def _parse_text_file(file_path: str, ext: str) -> tuple:
                 df_eager = _parse_ls_triage(lines, ls_pattern)
                 if df_eager is not None:
                     return df_eager, "macOS/Persistence_Triage"
+
+            # Attempt 3: Detect common forensic TXT formats
+            raw_lines = []
+            with open(file_path, 'r', errors='replace') as f:
+                raw_lines = f.readlines()
+            fmt, hdr_idx = _detect_txt_format(raw_lines)
+
+            if fmt == "netstat":
+                df = _parse_netstat(raw_lines, hdr_idx)
+                if not df.is_empty():
+                    return df, "Network/Netstat"
+
+            elif fmt == "tasklist":
+                df = _read_whitespace_csv(file_path)
+                if not df.is_empty():
+                    df = df.with_columns(pl.lit("Tasklist_Process").alias("EventID"))
+                    return df, "Windows/Tasklist"
+
+            elif fmt == "ps_aux":
+                df = _read_whitespace_csv(file_path)
+                if not df.is_empty():
+                    df = df.with_columns(pl.lit("Linux_Process").alias("EventID"))
+                    return df, "Linux/ProcessList"
+
+            elif fmt == "sc_query":
+                df = _parse_sc_query(raw_lines)
+                if not df.is_empty():
+                    return df, "Windows/Services"
+
+            elif fmt == "systeminfo":
+                df = _parse_systeminfo(raw_lines)
+                if not df.is_empty():
+                    return df, "Windows/SystemInfo"
+
+            elif fmt == "schtasks":
+                df = _parse_schtasks(raw_lines, hdr_idx)
+                if not df.is_empty():
+                    return df, "Windows/ScheduledTasks"
+
+            elif fmt == "arp":
+                df = _read_whitespace_csv(file_path)
+                if not df.is_empty():
+                    df = df.with_columns(pl.lit("ARP_Entry").alias("EventID"))
+                    return df, "Network/ARP"
+
+            elif fmt == "route_print":
+                df = _read_whitespace_csv(file_path)
+                if not df.is_empty():
+                    df = df.with_columns(pl.lit("Route_Entry").alias("EventID"))
+                    return df, "Network/RouteTable"
+
+            elif fmt == "ipconfig":
+                df = _parse_systeminfo(raw_lines)  # Key-value works for ipconfig too
+                if not df.is_empty():
+                    return df, "Network/IPConfig"
+
+            elif fmt == "autoruns":
+                df = _read_whitespace_csv(file_path)
+                if not df.is_empty():
+                    df = df.with_columns(pl.lit("Autorun_Entry").alias("EventID"))
+                    return df, "Windows/Autoruns"
 
             # Fallback: whitespace-separated
             return _read_whitespace_csv(file_path), file_cat

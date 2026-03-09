@@ -1,0 +1,114 @@
+title: Persistence via Startup Items – Suspicious Autorun Entries
+id: d0e1f2a3-9010-4cf3-e6f7-a8b9c0d1e234
+status: stable
+description: |
+  Detects startup/autorun entries pointing to suspicious filesystem locations in Autoruns
+  output, startup folder contents, or registry Run key exports. Attackers establish
+  persistence by adding entries to Windows startup locations (Run/RunOnce registry keys,
+  Startup folders, logon scripts) that execute malicious binaries on user logon or system
+  boot. Entries pointing to temp directories, user downloads, encoded PowerShell commands,
+  or non-standard executable extensions are flagged. This covers output from Sysinternals
+  Autoruns, reg query exports, and startup folder directory listings.
+references:
+  - https://attack.mitre.org/techniques/T1547/001/
+  - https://attack.mitre.org/techniques/T1547/004/
+  - https://attack.mitre.org/techniques/T1037/001/
+  - https://learn.microsoft.com/en-us/sysinternals/downloads/autoruns
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/09
+tags:
+  - attack.persistence
+  - attack.t1547.001
+  - attack.t1547.004
+  - attack.t1037.001
+  - artifact.autoruns
+  - artifact.startup
+logsource:
+  category: registry_set
+  product: windows
+detection:
+  suspicious_startup_path:
+    Command|contains|any:
+      - '\Temp\'
+      - '\tmp\'
+      - '\AppData\Local\Temp'
+      - '\Downloads\'
+      - '\Desktop\'
+      - '\Public\'
+      - '$Recycle.Bin'
+      - '\ProgramData\'
+      - '\perflogs\'
+      - '\Windows\Debug\'
+      - '/tmp/'
+      - '/var/tmp/'
+  suspicious_startup_extension:
+    Command|endswith|any:
+      - '.vbs'
+      - '.vbe'
+      - '.js'
+      - '.jse'
+      - '.wsf'
+      - '.wsh'
+      - '.hta'
+      - '.scr'
+      - '.pif'
+      - '.cpl'
+      - '.bat'
+      - '.cmd'
+      - '.ps1'
+  startup_with_interpreter:
+    Command|contains|any:
+      - 'powershell'
+      - 'pwsh'
+      - 'cmd /c'
+      - 'cmd.exe /c'
+      - 'wscript'
+      - 'cscript'
+      - 'mshta'
+      - 'rundll32'
+      - 'regsvr32'
+      - 'certutil'
+  encoded_startup_command:
+    Command|contains|any:
+      - '-enc '
+      - '-EncodedCommand'
+      - 'FromBase64'
+      - '-e JAB'
+      - '-e SQB'
+      - '-w hidden'
+      - '-windowstyle h'
+  suspicious_location:
+    Location|contains|any:
+      - 'Run'
+      - 'RunOnce'
+      - 'Startup'
+      - 'Logon'
+      - 'Explorer\Shell'
+      - 'Winlogon'
+      - 'UserInit'
+      - 'AppInit_DLLs'
+      - 'Boot Execute'
+      - 'LaunchAgents'
+      - 'LaunchDaemons'
+  condition: (suspicious_startup_path and suspicious_location) or suspicious_startup_extension or startup_with_interpreter or encoded_startup_command
+falsepositives:
+  - Legitimate applications using script-based launchers (.bat, .vbs) for configuration
+  - Enterprise software deployed via login scripts
+  - User-installed utilities that add themselves to startup from AppData
+level: high
+fields:
+  - Name
+  - Command
+  - Location
+  - User
+custom:
+  mitre_tactic: "TA0003 – Persistence"
+  mitre_technique: "T1547.001 – Registry Run Keys / Startup Folder"
+  investigation_note: |
+    For each suspicious entry, verify: (1) When was the entry created? Compare against
+    incident timeline. (2) Is the target binary signed and by whom? (3) What is the
+    file hash and does it match known malware? Check all standard persistence locations:
+    HKLM/HKCU Run, RunOnce, RunServices, Explorer\Shell Folders, Winlogon\Userinit,
+    Winlogon\Shell, AppInit_DLLs, and Startup folders. On macOS, check LaunchAgents
+    and LaunchDaemons plists. Encoded PowerShell in startup entries is almost always
+    malicious and should be decoded and analyzed immediately.

@@ -1,0 +1,69 @@
+title: ARP Cache Poisoning – Duplicate MAC and Gateway Anomalies
+id: e5f6a7b8-9005-4dae-f1a2-b3c4d5e6f789
+status: stable
+description: |
+  Detects indicators of ARP cache poisoning or ARP spoofing in ARP table artifacts
+  (arp -a output). ARP poisoning is a Layer 2 attack where an adversary sends crafted
+  ARP replies to associate their MAC address with the IP of another host (typically the
+  gateway), enabling man-in-the-middle interception. Indicators include dynamic entries
+  for gateway addresses, unusual MAC address patterns (broadcast MACs, multicast MACs),
+  and entries with type "dynamic" that should normally be "static" for critical
+  infrastructure like gateways and DNS servers.
+references:
+  - https://attack.mitre.org/techniques/T1557/002/
+  - https://attack.mitre.org/techniques/T1040/
+  - https://www.sans.org/white-papers/arp-spoofing-introduction/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/09
+tags:
+  - attack.credential_access
+  - attack.t1557
+  - attack.t1040
+  - artifact.arp_table
+logsource:
+  category: network_configuration
+  product: windows
+detection:
+  broadcast_mac:
+    PhysicalAddress|contains|any:
+      - 'ff-ff-ff-ff-ff-ff'
+      - 'FF-FF-FF-FF-FF-FF'
+      - 'ff:ff:ff:ff:ff:ff'
+  multicast_mac:
+    PhysicalAddress|startswith|any:
+      - '01-'
+      - '01:'
+      - '33-33'
+      - '33:33'
+  suspicious_dynamic:
+    Type|contains:
+      - 'dynamic'
+    InternetAddress|contains|any:
+      - '.1'
+      - '.254'
+      - '.253'
+  known_vm_spoofing_mac:
+    PhysicalAddress|startswith|any:
+      - '00-00-00'
+      - '00:00:00'
+      - '08-00-27'
+      - '08:00:27'
+  condition: broadcast_mac or multicast_mac or suspicious_dynamic or known_vm_spoofing_mac
+falsepositives:
+  - Broadcast ARP entries are normal for network discovery
+  - Virtual machine MAC prefixes (08-00-27 for VirtualBox) in lab environments
+  - DHCP-assigned dynamic entries for gateway IPs in home/small office networks
+level: medium
+fields:
+  - InternetAddress
+  - PhysicalAddress
+  - Type
+custom:
+  mitre_tactic: "TA0006 – Credential Access"
+  mitre_technique: "T1557.002 – ARP Cache Poisoning"
+  investigation_note: |
+    Compare the MAC address of the gateway entry against the known legitimate gateway MAC
+    from network documentation or DHCP server records. If multiple IPs map to the same MAC
+    or the gateway MAC has changed, ARP poisoning is likely active. Check for multiple
+    entries with the same MAC address pointing to different IPs — this is the hallmark
+    of an ARP spoofing attack. Correlate with packet captures if available.

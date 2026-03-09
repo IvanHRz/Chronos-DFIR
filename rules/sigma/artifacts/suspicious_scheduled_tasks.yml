@@ -1,0 +1,94 @@
+title: Suspicious Scheduled Tasks – Persistence via Task Scheduler
+id: b8c9d0e1-9008-4ad1-c4d5-e6f7a8b9c012
+status: stable
+description: |
+  Detects scheduled tasks with suspicious characteristics in schtasks output, Autoruns
+  exports, or forensic task XML artifacts. Attackers commonly abuse the Windows Task
+  Scheduler for persistence and execution, creating tasks that run encoded PowerShell
+  commands, execute binaries from temp directories, or trigger on specific events like
+  user logon. This rule identifies tasks with suspicious command lines, unusual trigger
+  patterns, and execution paths indicative of malware persistence. Parsed from schtasks
+  /query /fo CSV, Autoruns, or direct XML task files.
+references:
+  - https://attack.mitre.org/techniques/T1053/005/
+  - https://attack.mitre.org/techniques/T1059/001/
+  - https://www.sans.org/blog/scheduled-tasks-forensics/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/09
+tags:
+  - attack.persistence
+  - attack.execution
+  - attack.t1053.005
+  - artifact.scheduled_tasks
+logsource:
+  category: scheduled_task
+  product: windows
+detection:
+  task_from_temp:
+    Command|contains|any:
+      - '\Temp\'
+      - '\tmp\'
+      - '\AppData\'
+      - '\Downloads\'
+      - '\Desktop\'
+      - '\Public\'
+      - '$Recycle.Bin'
+      - '\ProgramData\'
+      - '\perflogs\'
+      - '/tmp/'
+      - '/var/tmp/'
+  encoded_task_command:
+    Command|contains|any:
+      - '-enc '
+      - '-EncodedCommand'
+      - 'FromBase64String'
+      - '-e JAB'
+      - '-e SQB'
+      - '-e aQB'
+      - 'hidden'
+      - '-windowstyle h'
+      - '-w hidden'
+      - '-nop -noni'
+  interpreter_task:
+    Command|contains|any:
+      - 'powershell'
+      - 'pwsh'
+      - 'cmd /c'
+      - 'cmd.exe /c'
+      - 'wscript'
+      - 'cscript'
+      - 'mshta'
+      - 'regsvr32'
+      - 'rundll32'
+      - 'certutil'
+      - 'bitsadmin'
+  suspicious_task_name:
+    TaskName|contains|any:
+      - 'Update'
+      - 'Sync'
+      - 'Helper'
+      - 'Service'
+      - 'Check'
+      - 'Monitor'
+      - 'Maintenance'
+    TaskName|re: '\\[A-Za-z]{1,2}[0-9]{3,}'
+  condition: task_from_temp or encoded_task_command or (interpreter_task and suspicious_task_name)
+falsepositives:
+  - Legitimate software update tasks (Adobe, Google, Microsoft) using PowerShell
+  - System maintenance tasks created by IT administrators
+  - Enterprise deployment tools creating tasks with generic names
+level: high
+fields:
+  - TaskName
+  - NextRunTime
+  - Status
+  - Command
+custom:
+  mitre_tactic: "TA0003 – Persistence"
+  mitre_technique: "T1053.005 – Scheduled Task"
+  investigation_note: |
+    Examine the task XML file (C:\Windows\System32\Tasks\<name>) for the full command line,
+    trigger conditions, and security context. Check Event ID 4698 (Task Created) for the
+    account that created the task and its creation timestamp. Decode any Base64 encoded
+    commands to reveal the payload. Tasks running as SYSTEM from user-writable paths are
+    especially suspicious. Correlate the task creation time with other compromise indicators.

@@ -1,0 +1,78 @@
+title: Process Memory Anomaly – Potential Injection or Hollowing
+id: a7b8c9d0-9007-4fc0-b3c4-d5e6f7a8b901
+status: stable
+description: |
+  Detects processes with abnormally high memory usage that may indicate process injection,
+  process hollowing, or reflective DLL loading. When attackers inject code into legitimate
+  processes, the working set and private bytes increase significantly beyond normal
+  baselines. For example, notepad.exe typically uses 5-15 MB; if it shows 200+ MB, code
+  injection is likely. This rule analyzes process memory statistics from tasklist, Process
+  Explorer, Volatility, or similar memory forensic tool output. It also flags processes
+  with suspiciously large thread counts which may indicate thread injection.
+references:
+  - https://attack.mitre.org/techniques/T1055/
+  - https://attack.mitre.org/techniques/T1055/012/
+  - https://attack.mitre.org/techniques/T1620/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/09
+tags:
+  - attack.defense_evasion
+  - attack.t1055
+  - attack.t1055.012
+  - artifact.process_list
+  - artifact.memory_forensics
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  lightweight_process_high_memory:
+    Name|contains|any:
+      - 'notepad'
+      - 'calc'
+      - 'mspaint'
+      - 'write'
+      - 'wordpad'
+      - 'charmap'
+      - 'osk'
+      - 'snippingtool'
+      - 'help'
+    MemUsage|re: '[0-9]{6,}'
+  system_process_bloated:
+    Name|contains|any:
+      - 'svchost'
+      - 'csrss'
+      - 'lsass'
+      - 'spoolsv'
+      - 'dllhost'
+    MemUsage|re: '[0-9]{7,}'
+  suspicious_working_set:
+    WorkingSet|re: '[0-9]{9,}'
+  high_thread_count:
+    Threads|re: '[0-9]{3,}'
+    Name|contains|any:
+      - 'notepad'
+      - 'calc'
+      - 'explorer'
+      - 'rundll32'
+  condition: lightweight_process_high_memory or system_process_bloated or suspicious_working_set or high_thread_count
+falsepositives:
+  - Svchost.exe instances hosting many services can legitimately use high memory
+  - 64-bit processes typically use more memory than 32-bit counterparts
+  - Processes with memory-mapped files may show inflated working set values
+  - Browser processes (chrome, firefox) legitimately use high memory
+level: high
+fields:
+  - Name
+  - PID
+  - MemUsage
+  - WorkingSet
+custom:
+  mitre_tactic: "TA0005 – Defense Evasion"
+  mitre_technique: "T1055 – Process Injection"
+  investigation_note: |
+    Compare the flagged process memory usage against known baselines for that executable.
+    Use Volatility's malfind plugin to scan for injected code sections (MEM_COMMIT +
+    PAGE_EXECUTE_READWRITE). Check for hollowed processes by comparing the in-memory
+    image against the on-disk binary. Examine the VAD (Virtual Address Descriptor) tree
+    for suspicious memory regions. Correlate with DLL loading events to identify
+    reflectively loaded modules not in the PEB's module list.

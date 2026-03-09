@@ -1,6 +1,6 @@
-import { API } from './api.js?v=189';
-import ChronosState from './state.js?v=189';
-import events from './events.js?v=189';
+import { API } from './api.js?v=191';
+import ChronosState from './state.js?v=191';
+import events from './events.js?v=191';
 
 export class ActionManager {
     constructor(gridManager, chartManager) {

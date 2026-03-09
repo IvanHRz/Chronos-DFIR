@@ -4,8 +4,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chronos-DFIR [v189]</title>
-    <script>console.log("%c CHRONOS-DFIR v189 LOADING...", "color: #00e676; font-size: 16px; font-weight: bold;");</script>
+    <title>Chronos-DFIR [v191]</title>
+    <script>console.log("%c CHRONOS-DFIR v191 LOADING...", "color: #00e676; font-size: 16px; font-weight: bold;");</script>
     <!-- Tabulator CSS -->
     <link href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator_midnight.min.css" rel="stylesheet">
     <!-- Main Style -->
@@ -28,7 +28,7 @@
     <div class="container">
         <header>
             <h1>Chronos-DFIR <span class="version-badge">BETA 1.1</span> <span class="version-badge"
-                    style="background:var(--accent-primary); color:white;">v189</span></h1>
+                    style="background:var(--accent-primary); color:white;">v191</span></h1>
             <p>Advanced Forensic Artifact Timeline Explorer</p>
         </header>
 
@@ -169,18 +169,20 @@
                 <canvas id="timeline-chart"></canvas>
             </div>
 
-            <!-- Distribution Charts (Tactic + Severity doughnuts) -->
-            <div id="distribution-row" style="display:none; gap:10px;">
-                <div class="chart-box" style="flex:1; min-width:250px; max-height:280px;">
-                    <canvas id="tactic-chart"></canvas>
+            <!-- Distribution Charts (Categories + Sources doughnuts) -->
+            <div id="distribution-row" style="display:none; gap:12px;">
+                <div class="chart-box" style="flex:1; min-width:280px; height:260px; position:relative;">
+                    <h4 style="color:var(--text-secondary,#aaa); margin:8px 12px 4px; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em;">Event Categories</h4>
+                    <canvas id="category-chart"></canvas>
                 </div>
-                <div class="chart-box" style="flex:1; min-width:250px; max-height:280px;">
-                    <canvas id="severity-chart"></canvas>
+                <div class="chart-box" style="flex:1; min-width:280px; height:260px; position:relative;">
+                    <h4 style="color:var(--text-secondary,#aaa); margin:8px 12px 4px; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em;">Sources</h4>
+                    <canvas id="source-chart"></canvas>
                 </div>
             </div>
 
             <!-- Analytics Row: Top EventIDs | Top Processes -->
-            <div id="analytics-row" style="display:none; gap:10px;">
+            <div id="analytics-row" style="display:none; gap:12px;">
                 <div class="chart-box" style="flex:1; min-width:300px; height:280px;">
                     <h4 style="color:var(--text-secondary,#aaa); margin:8px 12px 4px; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em;">Top Event IDs</h4>
                     <canvas id="top-events-chart"></canvas>

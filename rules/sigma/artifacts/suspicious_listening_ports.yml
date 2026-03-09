@@ -1,0 +1,83 @@
+title: Suspicious Listening Ports – Backdoor and C2 Indicators
+id: a1b2c3d4-9001-4f8e-b5a6-c7d8e9f01234
+status: stable
+description: |
+  Detects network listening ports commonly associated with backdoor implants, remote access
+  trojans (RATs), and command-and-control (C2) frameworks in netstat or similar network
+  output. Ports such as 4444 (Metasploit default), 5555 (Android ADB / backdoors),
+  8443 (Cobalt Strike), 9001 (Tor), and others are flagged when found in LISTENING state.
+  These ports appearing in forensic TXT artifacts from tools like netstat, ss, or
+  Get-NetTCPConnection warrant immediate investigation for unauthorized access.
+references:
+  - https://attack.mitre.org/techniques/T1571/
+  - https://attack.mitre.org/techniques/T1043/
+  - https://www.speedguide.net/port.php?port=4444
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/09
+tags:
+  - attack.command_and_control
+  - attack.t1571
+  - attack.t1043
+  - artifact.netstat
+logsource:
+  category: network_connection
+  product: windows
+detection:
+  listening_state:
+    State|contains|any:
+      - 'LISTENING'
+      - 'LISTEN'
+      - 'Listen'
+  backdoor_ports:
+    LocalAddress|contains|any:
+      - ':4444'
+      - ':4445'
+      - ':5555'
+      - ':5556'
+      - ':8443'
+      - ':9001'
+      - ':9002'
+      - ':1234'
+      - ':1337'
+      - ':31337'
+      - ':6666'
+      - ':6667'
+      - ':7777'
+      - ':8888'
+      - ':12345'
+      - ':54321'
+      - ':2222'
+      - ':3333'
+      - ':13337'
+      - ':9999'
+  c2_framework_ports:
+    LocalAddress|contains|any:
+      - ':50050'
+      - ':50051'
+      - ':443'
+      - ':8080'
+      - ':8081'
+      - ':2083'
+      - ':2087'
+  condition: listening_state and (backdoor_ports or c2_framework_ports)
+falsepositives:
+  - Development servers running on non-standard ports
+  - Legitimate VPN or proxy software using port 8443
+  - Web servers using ports 8080/8081 for testing
+  - Tor Browser legitimately using port 9001
+level: high
+fields:
+  - Proto
+  - LocalAddress
+  - ForeignAddress
+  - State
+  - PID
+custom:
+  mitre_tactic: "TA0011 – Command and Control"
+  mitre_technique: "T1571 – Non-Standard Port"
+  investigation_note: |
+    Cross-reference the PID with process listing artifacts to identify the binary
+    responsible for the listening port. Check if the process is signed, its file
+    path, and creation timestamp. Correlate with firewall logs to determine if
+    external connections were established. Ports 4444 and 31337 are almost never
+    used by legitimate software and should be treated as high-confidence indicators.

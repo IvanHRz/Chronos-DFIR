@@ -1,0 +1,80 @@
+title: Suspicious Established Network Connections
+id: d4e5f6a7-9004-4c9d-e0f1-a2b3c4d5e678
+status: stable
+description: |
+  Detects established network connections to suspicious ports or unusual destinations in
+  netstat output or similar network connection artifacts. Established connections to
+  known C2 ports, IRC channels, Tor network, or uncommon high ports may indicate active
+  command-and-control communication, data exfiltration, or lateral movement. This rule
+  complements listening port detection by identifying active outbound sessions that
+  suggest an implant is actively communicating with attacker infrastructure.
+references:
+  - https://attack.mitre.org/techniques/T1071/
+  - https://attack.mitre.org/techniques/T1095/
+  - https://attack.mitre.org/techniques/T1572/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/09
+tags:
+  - attack.command_and_control
+  - attack.t1071
+  - attack.t1095
+  - artifact.netstat
+logsource:
+  category: network_connection
+  product: windows
+detection:
+  established_state:
+    State|contains|any:
+      - 'ESTABLISHED'
+      - 'ESTAB'
+      - 'Established'
+  suspicious_remote_ports:
+    ForeignAddress|contains|any:
+      - ':4444'
+      - ':5555'
+      - ':6666'
+      - ':6667'
+      - ':6668'
+      - ':6669'
+      - ':8443'
+      - ':9001'
+      - ':9050'
+      - ':9150'
+      - ':1337'
+      - ':31337'
+      - ':12345'
+      - ':54321'
+      - ':7777'
+      - ':8888'
+      - ':9999'
+      - ':4443'
+      - ':50050'
+  tor_proxy_connections:
+    ForeignAddress|contains|any:
+      - ':9050'
+      - ':9150'
+    LocalAddress|contains|any:
+      - '127.0.0.1'
+      - '0.0.0.0'
+  condition: established_state and (suspicious_remote_ports or tor_proxy_connections)
+falsepositives:
+  - Legitimate IRC clients connected to IRC networks on port 6667
+  - Tor Browser connecting through local SOCKS proxy
+  - Development tools using non-standard ports for testing
+  - Gaming or streaming applications on high ports
+level: high
+fields:
+  - Proto
+  - LocalAddress
+  - ForeignAddress
+  - State
+custom:
+  mitre_tactic: "TA0011 – Command and Control"
+  mitre_technique: "T1071 – Application Layer Protocol"
+  investigation_note: |
+    For each suspicious connection, resolve the foreign IP address to determine
+    geolocation and hosting provider. Check threat intelligence feeds for known
+    malicious IPs. Correlate with DNS query logs to identify the domain that
+    resolved to this IP. Examine the process bound to this connection using the
+    PID. Connections to Tor entry/exit nodes (port 9001) or local Tor proxy
+    (9050/9150) indicate anonymization attempts that require immediate attention.

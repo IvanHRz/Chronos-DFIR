@@ -1,0 +1,86 @@
+title: Rootkit Indicators – Hidden Processes and Kernel Anomalies
+id: c9d0e1f2-9009-4be2-d5e6-f7a8b9c0d123
+status: stable
+description: |
+  Detects indicators of rootkit activity in memory forensic artifacts and system
+  enumeration output. Rootkits operate at kernel level to hide processes, files, network
+  connections, and registry keys from standard system tools. This rule identifies
+  discrepancies typical of rootkit presence: processes visible only in memory forensics
+  but not in live system tools, suspicious kernel modules, hooked system call tables
+  (SSDT), processes with abnormally low PIDs not matching known system processes, and
+  hidden processes revealed by cross-view analysis (Volatility psxview, GMER, etc.).
+references:
+  - https://attack.mitre.org/techniques/T1014/
+  - https://attack.mitre.org/techniques/T1547/006/
+  - https://volatility3.readthedocs.io/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/09
+tags:
+  - attack.defense_evasion
+  - attack.t1014
+  - attack.t1547.006
+  - artifact.memory_forensics
+  - artifact.rootkit_scan
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  hidden_process_indicators:
+    Name|contains|any:
+      - 'HIDDEN'
+      - 'hidden'
+      - 'False'
+      - 'false'
+    Offset|re: '0x[0-9a-fA-F]{8,}'
+  suspicious_kernel_modules:
+    Name|contains|any:
+      - 'rootkit'
+      - 'hide'
+      - 'stealth'
+      - 'cloak'
+      - 'shadow'
+      - 'ghost'
+      - 'phantom'
+      - 'invisible'
+  hooked_ssdt_indicators:
+    Name|contains|any:
+      - 'HOOKED'
+      - 'Hooked'
+      - 'UNKNOWN'
+      - 'Unknown'
+      - 'SUSPICIOUS'
+  abnormal_system_process:
+    PID|re: '^[0-9]{1,2}$'
+    Name|contains|any:
+      - 'cmd'
+      - 'powershell'
+      - 'rundll32'
+      - 'regsvr32'
+      - 'mshta'
+  zero_thread_process:
+    Threads|equals: '0'
+    HandleCount|re: '^[0-9]{1,2}$'
+  condition: hidden_process_indicators or suspicious_kernel_modules or hooked_ssdt_indicators or abnormal_system_process or zero_thread_process
+falsepositives:
+  - Volatility psxview showing "False" for terminated processes in certain columns
+  - Anti-cheat kernel drivers with obfuscated names
+  - Security products that hook SSDT for monitoring purposes (HIPS, EDR agents)
+level: critical
+fields:
+  - Name
+  - PID
+  - Offset
+  - Threads
+  - HandleCount
+custom:
+  mitre_tactic: "TA0005 – Defense Evasion"
+  mitre_technique: "T1014 – Rootkit"
+  investigation_note: |
+    Use Volatility's psxview plugin for cross-reference analysis — a process visible in
+    psscan but not pslist indicates DKOM (Direct Kernel Object Manipulation). Check the
+    SSDT (System Service Descriptor Table) with Volatility's ssdt plugin for hooked
+    entries pointing outside ntoskrnl.exe or win32k.sys. Examine loaded kernel modules
+    with modscan/modules for unsigned or unknown drivers. For Linux, check for hidden
+    kernel modules with lsmod comparison against /proc/modules and /sys/module/. Any
+    confirmed rootkit finding indicates a fully compromised system requiring disk
+    imaging and offline forensic analysis.
