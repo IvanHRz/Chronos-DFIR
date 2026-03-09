@@ -92,7 +92,7 @@ def analyze_dataframe(df_source, target_bars=50, start_time: str = None, end_tim
                 pl.col("ts").min().alias("min_ts"),
                 pl.col("ts").max().alias("max_ts"),
                 pl.len().alias("count")
-            ]).collect(streaming=True)
+            ]).collect()
 
             file_min = global_stats_df[0, "min_ts"]
             file_max = global_stats_df[0, "max_ts"]
@@ -126,7 +126,7 @@ def analyze_dataframe(df_source, target_bars=50, start_time: str = None, end_tim
             pl.col("ts").min().alias("min_ts"),
             pl.col("ts").max().alias("max_ts"),
             pl.len().alias("count")
-        ]).collect(streaming=True)
+        ]).collect()
 
         view_min = view_stats_df[0, "min_ts"]
         view_max = view_stats_df[0, "max_ts"]
@@ -175,7 +175,7 @@ def analyze_dataframe(df_source, target_bars=50, start_time: str = None, end_tim
                 pl.col("ts").dt.truncate(bucket).alias("_bucket")
             ).group_by("_bucket").agg(
                 pl.len().cast(pl.Int32).alias("cnt")
-            ).sort("_bucket").collect(streaming=True)
+            ).sort("_bucket").collect()
 
             labels = bucketed_df["_bucket"].dt.to_string("%Y-%m-%d %H:%M").to_list()
             y_vals = bucketed_df["cnt"].to_list()
@@ -201,7 +201,7 @@ def analyze_dataframe(df_source, target_bars=50, start_time: str = None, end_tim
 
         if _tactic_col:
             try:
-                tactic_counts = q_filtered.group_by(_tactic_col).agg(pl.len().alias("count")).collect(streaming=True)
+                tactic_counts = q_filtered.group_by(_tactic_col).agg(pl.len().alias("count")).collect()
                 distributions["tactics"] = dict(zip(
                     tactic_counts[_tactic_col].cast(pl.Utf8, strict=False).to_list(),
                     tactic_counts["count"].to_list()
@@ -210,7 +210,7 @@ def analyze_dataframe(df_source, target_bars=50, start_time: str = None, end_tim
                 logger.warning(f"Tactics distribution failed: {_te}")
 
         if level_col and level_col in q_filtered.collect_schema().names():
-            sev_counts = q_filtered.group_by(level_col).agg(pl.len().alias("count")).collect(streaming=True)
+            sev_counts = q_filtered.group_by(level_col).agg(pl.len().alias("count")).collect()
             distributions["severity"] = dict(zip(
                 sev_counts[level_col].cast(pl.Utf8, strict=False).fill_null("N/A").to_list(),
                 sev_counts["count"].to_list()

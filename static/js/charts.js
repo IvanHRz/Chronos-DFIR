@@ -1,5 +1,5 @@
-import ChronosState from './state.js?v=185';
-import events from './events.js?v=185';
+import ChronosState from './state.js?v=188';
+import events from './events.js?v=188';
 
 export class ChartManager {
     constructor() {

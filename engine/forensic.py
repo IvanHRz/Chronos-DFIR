@@ -941,7 +941,7 @@ def ingest_json_file(file_path: str) -> pl.LazyFrame:
         # 1. Attempt NDJSON Scan first (Optimistic)
         try:
             lf = pl.scan_ndjson(file_path)
-            lf.fetch(1)
+            lf.collect().head(1)
             return lf
         except:
             pass
@@ -1676,7 +1676,7 @@ def calculate_smart_risk_m4(df_parsed: pl.DataFrame, df_iocs: pl.DataFrame = Non
             try:
                 lf_time = df_parsed.lazy() if not is_lazy else df_parsed
                 lf_time = lf_time.select([time_col]).with_columns(pl.col(time_col).cast(pl.Utf8).str.to_datetime(strict=False)).drop_nulls(time_col).sort(time_col)
-                df_time = lf_time.collect(streaming=True)
+                df_time = lf_time.collect(engine="streaming")
             except Exception:
                 df_time = pl.DataFrame()
 

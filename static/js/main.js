@@ -1,10 +1,10 @@
-console.log("CHRONOS-CORE: Loading v185...");
-import { API } from './api.js?v=185';
-import { GridManager } from './grid.js?v=185';
-import { ChartManager } from './charts.js?v=185';
-import { ActionManager } from './actions.js?v=185';
-import ChronosState from './state.js?v=185';
-import events from './events.js?v=185';
+console.log("CHRONOS-CORE: Loading v188...");
+import { API } from './api.js?v=188';
+import { GridManager } from './grid.js?v=188';
+import { ChartManager } from './charts.js?v=188';
+import { ActionManager } from './actions.js?v=188';
+import ChronosState from './state.js?v=188';
+import events from './events.js?v=188';
 
 // Initialize Managers
 const grid = new GridManager('timeline-table');
@@ -381,8 +381,16 @@ async function exportData(format) {
         console.log(`[EXPORT] Response:`, result);
 
         if (result.download_url) {
-            // Direct location redirect — Content-Disposition: attachment ensures download
-            window.location.href = result.download_url;
+            // Direct server URL — backend sends Content-Disposition: attachment
+            window.isDownloading = true;
+            const a = document.createElement('a');
+            a.href = result.download_url;
+            a.download = result.filename || 'Export.csv';
+            a.style.position = 'fixed';
+            a.style.left = '-9999px';
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(() => { document.body.removeChild(a); window.isDownloading = false; }, 4000);
             console.log(`[EXPORT] Download triggered: ${result.download_url}`);
         } else if (result.error || result.detail) {
             alert("Export failed: " + (result.error || result.detail || JSON.stringify(result)));

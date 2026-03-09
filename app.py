@@ -313,7 +313,7 @@ async def get_data(request: Request, filename: str, page: int = 1, size: int = 5
         try:
             lf = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=0)
             try:
-                lf.fetch(1)
+                lf.collect().head(1)
             except:
                 lf = pl.scan_csv(csv_path, encoding='utf8-lossy', ignore_errors=True, infer_schema_length=0)
         except Exception as scan_err:
@@ -328,7 +328,7 @@ async def get_data(request: Request, filename: str, page: int = 1, size: int = 5
                 lf = lf.with_row_index(name="_id", offset=1)
 
             # Count unfiltered total BEFORE applying filters
-            total_unfiltered = lf.select(pl.len()).collect(streaming=True).item()
+            total_unfiltered = lf.select(pl.len()).collect(engine="streaming").item()
 
             # Apply Unified Processing (query, filters, time range, sort)
             params = {
@@ -342,7 +342,7 @@ async def get_data(request: Request, filename: str, page: int = 1, size: int = 5
             lf = _apply_standard_processing(lf, params)
 
             # Calculate total rows BEFORE slicing (filtered count)
-            total_rows = lf.select(pl.len()).collect(streaming=True).item()
+            total_rows = lf.select(pl.len()).collect(engine="streaming").item()
             last_page = math.ceil(total_rows / size) if size > 0 else 1
             offset = (page - 1) * size
 
@@ -380,7 +380,7 @@ async def get_data(request: Request, filename: str, page: int = 1, size: int = 5
 
             # Final normalization for display
             q = normalize_time_columns_in_df(q)
-            df_page = q.collect(streaming=True)
+            df_page = q.collect(engine="streaming")
 
             return {
                 "current_page": page,
@@ -425,7 +425,7 @@ async def get_empty_columns(filename: str, query: Optional[str] = None, start_ti
         # Scan to get lazy frame
         try:
             lf = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=0)
-            lf.fetch(1)
+            lf.collect().head(1)
         except:
             lf = pl.scan_csv(csv_path, encoding='utf8-lossy', ignore_errors=True, infer_schema_length=0)
 
@@ -464,7 +464,7 @@ async def get_empty_columns(filename: str, query: Optional[str] = None, start_ti
             )
 
         # Collect this single row result
-        res = lf.select(exprs).collect(streaming=True)
+        res = lf.select(exprs).collect(engine="streaming")
 
         # Exclude internal/index columns that always contain data
         INTERNAL_COLS = {"_id", "No.", "Original_No."}
@@ -503,7 +503,7 @@ async def get_histogram(filename: str, exclude_id: str = None, start_time: str =
         log_step("Starting Lazy Load Logic")
         try:
             df = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=0)
-            df.fetch(1) # Test if it works
+            df.collect().head(1)  # Test if it works
             log_step("scan_csv (strict) succeeded")
         except:
             df = pl.scan_csv(csv_path, encoding='utf8-lossy', ignore_errors=True, infer_schema_length=0)
@@ -656,8 +656,7 @@ async def download_file(filename: str, background_tasks: BackgroundTasks):
     file_path = os.path.join(OUTPUT_DIR, filename)
     if os.path.exists(file_path):
         background_tasks.add_task(delete_file, file_path)
-        headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
-        return FileResponse(file_path, headers=headers)
+        return FileResponse(file_path, filename=filename, media_type='application/octet-stream')
     return JSONResponse(content={"error": "File not found"}, status_code=404)
 
 class FilterModel(BaseModel):
@@ -1020,7 +1019,7 @@ async def export_filtered(request: ExportRequest, background_tasks: BackgroundTa
 
         try:
             lf = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=0)
-            lf.fetch(1)
+            lf.collect().head(1)
         except:
             lf = pl.scan_csv(csv_path, encoding='utf8-lossy', ignore_errors=True, infer_schema_length=0)
 
@@ -1203,7 +1202,7 @@ async def export_filtered(request: ExportRequest, background_tasks: BackgroundTa
                     cast_exprs.append(pl.col(col).cast(pl.Utf8))
             if cast_exprs:
                 lf = lf.with_columns(cast_exprs)
-            df = lf.collect(streaming=True)
+            df = lf.collect(engine="streaming")
             # Use Python json.dump for proper array format (Polars removed row_oriented kwarg)
             import json as _json_mod
             with open(out_path, "w", encoding="utf-8") as _jf:
@@ -1306,7 +1305,7 @@ async def export_html(request: ExportRequest, background_tasks: BackgroundTasks)
 
         try:
             lf = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=0)
-            lf.fetch(1)
+            lf.collect().head(1)
         except:
             lf = pl.scan_csv(csv_path, encoding='utf8-lossy', ignore_errors=True, infer_schema_length=0)
 
@@ -1972,7 +1971,7 @@ async def export_split_zip(request: ExportRequest, background_tasks: BackgroundT
 
         try:
             lf = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=0)
-            lf.fetch(1)
+            lf.collect().head(1)
         except:
             lf = pl.scan_csv(csv_path, encoding='utf8-lossy', ignore_errors=True, infer_schema_length=0)
 
@@ -2054,7 +2053,7 @@ async def export_split_zip(request: ExportRequest, background_tasks: BackgroundT
             header_written = False
 
             while offset < total_rows:
-                df_batch = lf.slice(offset, batch_size).collect(streaming=True)
+                df_batch = lf.slice(offset, batch_size).collect(engine="streaming")
 
                 temp_buf = io.BytesIO()
                 if use_json:

@@ -1,6 +1,6 @@
-import { API } from './api.js?v=185';
-import ChronosState from './state.js?v=185';
-import events from './events.js?v=185';
+import { API } from './api.js?v=188';
+import ChronosState from './state.js?v=188';
+import events from './events.js?v=188';
 
 export class ActionManager {
     constructor(gridManager, chartManager) {
@@ -238,9 +238,8 @@ export class ActionManager {
             if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
             const result = await resp.json();
             if (result.download_url) {
-                window.location.href = result.download_url;
+                await this._triggerDownload(result.download_url, result.filename || 'ForensicSummary.xlsx');
             }
-            setTimeout(() => { window.isDownloading = false; }, 4000);
         } catch (e) {
             console.error('XLSX export failed, falling back to CSV:', e);
             this._exportForensicSummaryCSV(data, filename);
@@ -297,25 +296,33 @@ export class ActionManager {
             console.log(`[EXPORT] Response:`, result);
 
             if (result.download_url) {
-                window.location.href = result.download_url;
+                await this._triggerDownload(result.download_url, result.filename || `Export.${format}`);
             } else {
                 alert("Export failed: " + (result.error || result.detail || JSON.stringify(result)));
             }
         } catch (e) {
             console.error("[EXPORT] Error:", e);
             alert("Export error: " + e.message);
-        } finally {
-            setTimeout(() => { window.isDownloading = false; }, 4000);
         }
     }
 
-    _triggerDownload(url, filename) {
+    async _triggerDownload(url, filename) {
         window.isDownloading = true;
         console.log(`[DOWNLOAD] Triggering: ${url} (${filename})`);
         this._closeExportDropdown();
-        // Direct location redirect — Content-Disposition: attachment ensures download
-        window.location.href = url;
-        setTimeout(() => { window.isDownloading = false; }, 4000);
+        // Use direct server URL — backend sends Content-Disposition: attachment
+        // Blob URLs strip HTTP headers and Arc/Chromium shows internal UUIDs
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename || 'download';
+        a.style.position = 'fixed';
+        a.style.left = '-9999px';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+            document.body.removeChild(a);
+            window.isDownloading = false;
+        }, 4000);
     }
 
     // Called automatically after file loads to populate the forensic dashboard bar
@@ -437,7 +444,7 @@ export class ActionManager {
 
             const data = await resp.json();
             if (data.download_url) {
-                this._triggerDownload(data.download_url, data.filename || '');
+                await this._triggerDownload(data.download_url, data.filename || 'Split.zip');
             }
 
         } catch (e) {
@@ -497,7 +504,7 @@ export class ActionManager {
 
             const data = await resp.json();
             if (data.download_url) {
-                this._triggerDownload(data.download_url, data.filename || '');
+                await this._triggerDownload(data.download_url, data.filename || 'Report.html');
             }
 
         } catch (e) {
@@ -654,7 +661,7 @@ export class ActionManager {
                         });
                         const result = await resp.json();
                         if (result.download_url) {
-                            this._triggerDownload(result.download_url, result.filename || 'ChronosReport.pdf');
+                            await this._triggerDownload(result.download_url, result.filename || 'ChronosReport.pdf');
 
                             // Inform user which method was used
                             const methodLabels = {
