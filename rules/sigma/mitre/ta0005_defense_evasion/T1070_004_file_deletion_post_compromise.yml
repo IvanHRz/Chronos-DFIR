@@ -1,0 +1,75 @@
+title: File Deletion for Anti-Forensics Post-Compromise
+id: a7b8c9d0-e1f2-3456-abcd-456789012345
+status: stable
+description: |
+  Detects deliberate file deletion used to destroy evidence after compromise.
+  Attackers delete tools, logs, scripts, and temporary files to cover their
+  tracks. Common patterns include deleting executables from temp directories,
+  using cipher.exe to overwrite free space, and SDelete for secure deletion.
+  Also covers PowerShell and cmd.exe bulk deletion patterns.
+references:
+  - https://attack.mitre.org/techniques/T1070/004/
+  - https://docs.microsoft.com/en-us/sysinternals/downloads/sdelete
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/09
+tags:
+  - attack.defense_evasion
+  - attack.t1070.004
+  - anti_forensics
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  sdelete_usage:
+    Image|endswith: '\sdelete.exe'
+  sdelete_variant:
+    CommandLine|contains|any:
+      - 'sdelete'
+      - 'SDelete'
+  cipher_wipe:
+    Image|endswith: '\cipher.exe'
+    CommandLine|contains: '/w:'
+  powershell_delete:
+    Image|endswith|any:
+      - '\powershell.exe'
+      - '\pwsh.exe'
+    CommandLine|contains|any:
+      - 'Remove-Item -Force -Recurse'
+      - 'Remove-Item -Recurse -Force'
+      - 'del -Force'
+      - '[System.IO.File]::Delete'
+      - 'Clear-Content'
+  cmd_delete_temp:
+    Image|endswith: '\cmd.exe'
+    CommandLine|contains|any:
+      - 'del /f /q'
+      - 'del /s /f /q'
+      - 'rd /s /q'
+      - 'rmdir /s /q'
+      - 'erase /f'
+  fsutil_zero:
+    Image|endswith: '\fsutil.exe'
+    CommandLine|contains|any:
+      - 'setZeroData'
+      - 'deletejournal'
+  condition: sdelete_usage or sdelete_variant or cipher_wipe or powershell_delete or cmd_delete_temp or fsutil_zero
+falsepositives:
+  - Legitimate disk cleanup utilities
+  - Software uninstallers removing temp files
+  - IT scripts cleaning up deployment artifacts
+level: medium
+fields:
+  - Image
+  - CommandLine
+  - User
+  - Computer
+  - ParentImage
+custom:
+  mitre_tactic: "TA0005 – Defense Evasion"
+  mitre_technique: "T1070.004 – Indicator Removal: File Deletion"
+  chainsaw_compatible: true
+  investigation_note: |
+    Focus on deletion of executables (.exe, .dll, .ps1) from temp, downloads,
+    or user profile directories. Correlate with MFT $FILE_NAME timestamps to
+    find evidence of deleted files even after cleanup. Check USN Journal for
+    deletion records.

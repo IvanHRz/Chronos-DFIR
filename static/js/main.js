@@ -1,10 +1,10 @@
-console.log("CHRONOS-CORE: Loading v188...");
-import { API } from './api.js?v=188';
-import { GridManager } from './grid.js?v=188';
-import { ChartManager } from './charts.js?v=188';
-import { ActionManager } from './actions.js?v=188';
-import ChronosState from './state.js?v=188';
-import events from './events.js?v=188';
+console.log("CHRONOS-CORE: Loading v189...");
+import { API } from './api.js?v=189';
+import { GridManager } from './grid.js?v=189';
+import { ChartManager } from './charts.js?v=189';
+import { ActionManager } from './actions.js?v=189';
+import ChronosState from './state.js?v=189';
+import events from './events.js?v=189';
 
 // Initialize Managers
 const grid = new GridManager('timeline-table');

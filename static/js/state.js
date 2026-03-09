@@ -1,4 +1,4 @@
-import events from './events.js?v=188';
+import events from './events.js?v=189';
 
 /**
  * ChronosState - The Single Source of Truth for the application.

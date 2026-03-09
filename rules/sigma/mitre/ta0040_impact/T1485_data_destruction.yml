@@ -1,0 +1,86 @@
+title: Data Destruction and Wiper Activity
+id: b8c9d0e1-f2a3-4567-bcde-567890123456
+status: stable
+description: |
+  Detects data destruction activity including file overwriting, mass deletion,
+  and wiper malware indicators. Destructive attacks aim to render data
+  irrecoverable through encryption without keys, overwriting with random data,
+  or mass deletion. Covers both manual destruction via native tools and
+  automated wiper behavior patterns.
+references:
+  - https://attack.mitre.org/techniques/T1485/
+  - https://www.cisa.gov/uscert/ncas/alerts/aa22-057a
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/09
+tags:
+  - attack.impact
+  - attack.t1485
+  - critical
+  - destructive
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  format_drive:
+    Image|endswith: '\format.com'
+    CommandLine|contains|any:
+      - '/fs:'
+      - '/y'
+      - '/q'
+  mass_file_delete:
+    Image|endswith: '\cmd.exe'
+    CommandLine|contains|any:
+      - 'del /s /f /q C:\'
+      - 'del /s /f /q D:\'
+      - 'rd /s /q C:\Users'
+      - 'rd /s /q C:\Windows'
+  powershell_destroy:
+    Image|endswith|any:
+      - '\powershell.exe'
+      - '\pwsh.exe'
+    CommandLine|contains|any:
+      - 'Get-ChildItem -Recurse | Remove-Item -Force'
+      - 'Remove-Item C:\ -Recurse -Force'
+      - '[System.IO.File]::WriteAllBytes'
+      - 'Clear-Disk'
+  overwrite_mbr:
+    CommandLine|contains|any:
+      - '\\.\PhysicalDrive'
+      - '\\.\PHYSICALDRIVE'
+      - 'dd if=/dev/zero'
+      - 'dd if=/dev/urandom'
+  wiper_indicators:
+    CommandLine|contains|any:
+      - 'bcdedit /set {default} recoveryenabled no'
+      - 'bcdedit /set {default} bootstatuspolicy ignoreallfailures'
+      - 'wbadmin delete catalog'
+      - 'wbadmin delete systemstatebackup'
+  vss_delete:
+    Image|endswith|any:
+      - '\vssadmin.exe'
+      - '\wmic.exe'
+    CommandLine|contains|any:
+      - 'delete shadows'
+      - 'shadowcopy delete'
+      - 'resize shadowstorage /for=c: /on=c: /maxsize='
+  condition: format_drive or mass_file_delete or powershell_destroy or overwrite_mbr or wiper_indicators or vss_delete
+falsepositives:
+  - Authorized disk formatting during system provisioning
+  - Volume shadow cleanup during maintenance windows
+  - Backup software managing shadow copies
+level: critical
+fields:
+  - Image
+  - CommandLine
+  - User
+  - Computer
+  - ParentImage
+custom:
+  mitre_tactic: "TA0040 – Impact"
+  mitre_technique: "T1485 – Data Destruction"
+  chainsaw_compatible: true
+  investigation_note: |
+    Data destruction is often the final stage of a ransomware or wiper attack.
+    Check for prior credential access, lateral movement, and data staging.
+    VSS deletion combined with backup destruction (wbadmin) and recovery
+    disabling (bcdedit) is the classic ransomware preparation triad.

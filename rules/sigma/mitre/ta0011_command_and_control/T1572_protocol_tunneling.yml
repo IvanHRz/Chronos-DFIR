@@ -1,0 +1,89 @@
+title: Protocol Tunneling for Command and Control
+id: c9d0e1f2-a3b4-5678-cdef-678901234567
+status: stable
+description: |
+  Detects protocol tunneling techniques used to encapsulate C2 traffic within
+  legitimate protocols. Attackers tunnel traffic through DNS, HTTP, ICMP, or
+  SSH to bypass network security controls. Common tools include dnscat2, iodine,
+  chisel, ngrok, and SSH port forwarding. Detection focuses on tool execution
+  and suspicious tunnel configuration patterns.
+references:
+  - https://attack.mitre.org/techniques/T1572/
+  - https://github.com/iagox86/dnscat2
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/09
+tags:
+  - attack.command_and_control
+  - attack.t1572
+  - tunneling
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  ssh_tunnel:
+    CommandLine|contains|any:
+      - 'ssh -L'
+      - 'ssh -R'
+      - 'ssh -D'
+      - 'ssh.exe -L'
+      - 'ssh.exe -R'
+      - 'ssh.exe -D'
+      - 'plink -L'
+      - 'plink -R'
+      - 'plink -D'
+      - 'plink.exe -L'
+  tunnel_tools:
+    CommandLine|contains|any:
+      - 'chisel'
+      - 'ngrok'
+      - 'cloudflared tunnel'
+      - 'bore local'
+      - 'rathole'
+      - 'frpc'
+      - 'frps'
+  dns_tunnel:
+    CommandLine|contains|any:
+      - 'dnscat'
+      - 'iodine'
+      - 'dns2tcp'
+      - 'DNSteal'
+  icmp_tunnel:
+    CommandLine|contains|any:
+      - 'ptunnel'
+      - 'icmpsh'
+      - 'hans '
+      - 'icmptunnel'
+  netsh_portproxy:
+    Image|endswith: '\netsh.exe'
+    CommandLine|contains|any:
+      - 'interface portproxy'
+      - 'portproxy add'
+      - 'connectaddress='
+  socat_relay:
+    CommandLine|contains|any:
+      - 'socat TCP'
+      - 'socat OPENSSL'
+      - 'socat SOCKS'
+  condition: ssh_tunnel or tunnel_tools or dns_tunnel or icmp_tunnel or netsh_portproxy or socat_relay
+falsepositives:
+  - Developers using SSH tunnels for remote database access
+  - IT using ngrok for temporary webhook testing
+  - VPN solutions using protocol encapsulation
+level: high
+fields:
+  - Image
+  - CommandLine
+  - User
+  - Computer
+  - ParentImage
+  - DestinationIp
+  - DestinationPort
+custom:
+  mitre_tactic: "TA0011 – Command and Control"
+  mitre_technique: "T1572 – Protocol Tunneling"
+  chainsaw_compatible: true
+  investigation_note: |
+    Focus on tunnel tools running from unusual paths (temp, downloads, user
+    profile). SSH tunnels from non-admin users are suspicious. Check for
+    persistent tunnel configurations in scheduled tasks or startup items.
+    Correlate with unusual DNS query patterns for DNS tunneling detection.

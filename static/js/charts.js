@@ -1,12 +1,15 @@
-import ChronosState from './state.js?v=188';
-import events from './events.js?v=188';
+import ChronosState from './state.js?v=189';
+import events from './events.js?v=189';
 
 export class ChartManager {
     constructor() {
         this.charts = {
             timeline: null,
             tactic: null,
-            severity: null
+            severity: null,
+            topEvents: null,
+            topProcesses: null,
+            severityTime: null
         };
         this.isLogScale = false;
         this.setupEventListeners();
@@ -43,7 +46,12 @@ export class ChartManager {
 
         events.on('STATE_RESET', () => {
             Object.values(this.charts).forEach(c => { if (c) c.destroy(); });
-            this.charts = { timeline: null, tactic: null, severity: null };
+            this.charts = { timeline: null, tactic: null, severity: null, topEvents: null, topProcesses: null, severityTime: null };
+            // Hide all chart containers
+            for (const id of ['chart-wrapper', 'distribution-row', 'analytics-row', 'severity-time-wrapper']) {
+                const el = document.getElementById(id);
+                if (el) el.style.display = 'none';
+            }
         });
     }
 
@@ -204,6 +212,121 @@ export class ChartManager {
         });
     }
 
+    renderHorizontalBar(chartKey, ctxId, data, title) {
+        if (this.charts[chartKey]) this.charts[chartKey].destroy();
+        const canvas = document.getElementById(ctxId);
+        if (!canvas || !data?.labels?.length) return;
+
+        const total = data.values.reduce((a, b) => a + b, 0);
+        // Gradient: blue → teal
+        const colors = data.labels.map((_, i) => {
+            const t = data.labels.length > 1 ? i / (data.labels.length - 1) : 0;
+            const r = Math.round(59 * (1 - t) + 20 * t);
+            const g = Math.round(130 * (1 - t) + 184 * t);
+            const b = Math.round(246 * (1 - t) + 166 * t);
+            return `rgba(${r},${g},${b},0.8)`;
+        });
+
+        this.charts[chartKey] = new Chart(canvas.getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: data.labels,
+                datasets: [{
+                    label: title || 'Count',
+                    data: data.values,
+                    backgroundColor: colors,
+                    borderColor: colors.map(c => c.replace('0.8', '1')),
+                    borderWidth: 1,
+                    borderRadius: 4,
+                    barPercentage: 0.8
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: { duration: 300 },
+                scales: {
+                    x: {
+                        beginAtZero: true,
+                        grid: { color: 'rgba(255,255,255,0.06)' },
+                        ticks: { color: '#aaa' }
+                    },
+                    y: {
+                        grid: { display: false },
+                        ticks: { color: '#ccc', font: { size: 11 } }
+                    }
+                },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: (ctx) => {
+                                const pct = total > 0 ? ((ctx.raw / total) * 100).toFixed(1) : 0;
+                                return `${ctx.raw.toLocaleString()} events (${pct}%)`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    renderStackedTimeline(ctxId, data) {
+        if (this.charts.severityTime) this.charts.severityTime.destroy();
+        const canvas = document.getElementById(ctxId);
+        if (!canvas || !data?.labels?.length || !data?.series) return;
+
+        const sevColors = {
+            'critical': '#ef4444', 'high': '#f97316', 'medium': '#eab308',
+            'low': '#22c55e', 'informational': '#64748b', 'info': '#64748b'
+        };
+        const defaultColors = ['#8b5cf6', '#06b6d4', '#ec4899', '#84cc16', '#f43f5e'];
+        let colorIdx = 0;
+
+        const datasets = Object.entries(data.series).map(([level, counts]) => {
+            const key = level.toLowerCase();
+            const color = sevColors[key] || defaultColors[colorIdx++ % defaultColors.length];
+            return {
+                label: level,
+                data: counts,
+                backgroundColor: color + 'cc',
+                borderColor: color,
+                borderWidth: 1
+            };
+        });
+
+        this.charts.severityTime = new Chart(canvas.getContext('2d'), {
+            type: 'bar',
+            data: { labels: data.labels, datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: { duration: 300 },
+                scales: {
+                    x: {
+                        stacked: true,
+                        grid: { display: false },
+                        ticks: { color: '#aaa', maxRotation: 45, minRotation: 45 }
+                    },
+                    y: {
+                        stacked: true,
+                        beginAtZero: true,
+                        grid: { color: 'rgba(255,255,255,0.06)' },
+                        ticks: { color: '#aaa' }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        position: 'top',
+                        labels: { color: '#ccc', boxWidth: 12, padding: 8 }
+                    },
+                    tooltip: { mode: 'index', intersect: false }
+                }
+            }
+        });
+    }
+
     async loadHistogram(filename, excludeId = null, startTime = null, endTime = null, colFilters = {}) {
         const params = new URLSearchParams();
         if (excludeId) params.append('exclude_id', excludeId);
@@ -266,16 +389,26 @@ export class ChartManager {
     }
 
     updateWithData(data) {
+        const isNoTimeline = data.no_timeline === true;
+
         // --- Timeline Chart ---
-        if (data.labels && data.datasets) {
-            // Show the chart wrapper (hidden by default in CSS)
+        if (!isNoTimeline && data.labels?.length && data.datasets) {
             const chartWrapper = document.getElementById('chart-wrapper');
             if (chartWrapper) chartWrapper.style.display = 'block';
-
             this.renderTimeline('timeline-chart', data, 'chart-interpretation');
+        } else {
+            const chartWrapper = document.getElementById('chart-wrapper');
+            if (chartWrapper) chartWrapper.style.display = 'none';
+            if (isNoTimeline) {
+                const interp = document.getElementById('chart-interpretation');
+                if (interp) {
+                    interp.innerHTML = '<b>No timeline available</b> — showing frequency analysis charts.';
+                    interp.style.display = 'block';
+                }
+            }
         }
 
-        // --- Distribution Charts ---
+        // --- Distribution Charts (Doughnuts) ---
         if (data.distributions) {
             const hasDistributions = data.distributions.tactics || data.distributions.severity;
             if (hasDistributions) {
@@ -287,6 +420,30 @@ export class ChartManager {
             }
             if (data.distributions.severity) {
                 this.renderDistribution('severity-chart', data.distributions.severity, 'Severity Distribution');
+            }
+
+            // --- Top EventIDs (horizontal bar) ---
+            if (data.distributions.top_events) {
+                const row = document.getElementById('analytics-row');
+                if (row) row.style.display = 'flex';
+                this.renderHorizontalBar('topEvents', 'top-events-chart',
+                    data.distributions.top_events, 'Top Event IDs');
+            }
+
+            // --- Top Processes (horizontal bar) ---
+            if (data.distributions.top_processes) {
+                const row = document.getElementById('analytics-row');
+                if (row) row.style.display = 'flex';
+                this.renderHorizontalBar('topProcesses', 'top-processes-chart',
+                    data.distributions.top_processes, 'Top Processes');
+            }
+
+            // --- Severity Over Time (stacked bar) ---
+            if (!isNoTimeline && data.distributions.severity_over_time) {
+                const wrapper = document.getElementById('severity-time-wrapper');
+                if (wrapper) wrapper.style.display = 'block';
+                this.renderStackedTimeline('severity-time-chart',
+                    data.distributions.severity_over_time);
             }
         }
 

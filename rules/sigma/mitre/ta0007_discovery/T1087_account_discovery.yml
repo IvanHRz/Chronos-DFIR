@@ -1,0 +1,87 @@
+title: Account and Group Discovery Enumeration
+id: e5f6a7b8-c9d0-1234-efab-234567890123
+status: stable
+description: |
+  Detects enumeration of local and domain accounts, groups, and permissions.
+  Attackers perform account discovery early in post-exploitation to identify
+  privileged accounts, service accounts, and group memberships. Tools like
+  net.exe, dsquery, and PowerShell AD cmdlets are commonly used. High volume
+  of these commands in short succession is a strong indicator of reconnaissance.
+references:
+  - https://attack.mitre.org/techniques/T1087/
+  - https://attack.mitre.org/techniques/T1087/001/
+  - https://attack.mitre.org/techniques/T1087/002/
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/09
+tags:
+  - attack.discovery
+  - attack.t1087
+  - attack.t1087.001
+  - attack.t1087.002
+  - reconnaissance
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  net_user_enum:
+    Image|endswith|any:
+      - '\net.exe'
+      - '\net1.exe'
+    CommandLine|contains|any:
+      - 'user'
+      - 'localgroup'
+      - 'group'
+      - 'accounts'
+      - '/domain'
+  wmic_user_enum:
+    Image|endswith: '\wmic.exe'
+    CommandLine|contains|any:
+      - 'useraccount'
+      - 'group'
+      - 'sysaccount'
+  powershell_ad_enum:
+    Image|endswith|any:
+      - '\powershell.exe'
+      - '\pwsh.exe'
+    CommandLine|contains|any:
+      - 'Get-ADUser'
+      - 'Get-ADGroup'
+      - 'Get-ADGroupMember'
+      - 'Get-LocalUser'
+      - 'Get-LocalGroup'
+      - 'Get-ADComputer'
+      - '[ADSI]'
+      - 'DirectorySearcher'
+  dsquery_enum:
+    Image|endswith: '\dsquery.exe'
+    CommandLine|contains|any:
+      - 'user'
+      - 'group'
+      - 'computer'
+  nltest_enum:
+    Image|endswith: '\nltest.exe'
+    CommandLine|contains|any:
+      - '/dclist'
+      - '/domain_trusts'
+      - '/trusted_domains'
+  condition: net_user_enum or wmic_user_enum or powershell_ad_enum or dsquery_enum or nltest_enum
+falsepositives:
+  - System administrators performing user audits
+  - IT helpdesk looking up user accounts
+  - Automated inventory scripts
+level: low
+fields:
+  - Image
+  - CommandLine
+  - User
+  - Computer
+  - ParentImage
+custom:
+  mitre_tactic: "TA0007 – Discovery"
+  mitre_technique: "T1087 – Account Discovery"
+  chainsaw_compatible: true
+  investigation_note: |
+    Individual account enumeration commands are common admin activity.
+    Focus on clusters of multiple discovery commands from the same user/host
+    in a short time window. Correlate with other discovery techniques
+    (T1082, T1049, T1057) for reconnaissance pattern detection.

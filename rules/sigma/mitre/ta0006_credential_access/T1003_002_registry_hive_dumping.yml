@@ -1,0 +1,85 @@
+title: Registry Hive Dumping for Credential Extraction
+id: d4e5f6a7-b8c9-0123-defa-123456789012
+status: stable
+description: |
+  Detects dumping of SAM, SECURITY, and SYSTEM registry hives for offline
+  credential extraction. Attackers use reg.exe save/export or volume shadow
+  copies to extract these hives, then use tools like secretsdump, samdump2,
+  or mimikatz to extract local account hashes and cached domain credentials.
+  This is one of the most common credential theft techniques on Windows.
+references:
+  - https://attack.mitre.org/techniques/T1003/002/
+  - https://www.ired.team/offensive-security/credential-access-and-credential-dumping/dumping-hashes-from-sam-registry
+author: Chronos-DFIR / Ivan Huerta
+date: 2026/03/09
+tags:
+  - attack.credential_access
+  - attack.t1003.002
+  - critical
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  reg_save_hive:
+    Image|endswith: '\reg.exe'
+    CommandLine|contains|any:
+      - 'save HKLM\SAM'
+      - 'save HKLM\SECURITY'
+      - 'save HKLM\SYSTEM'
+      - 'save HKLM\\SAM'
+      - 'save HKLM\\SECURITY'
+      - 'save HKLM\\SYSTEM'
+      - 'export HKLM\SAM'
+      - 'export HKLM\SECURITY'
+      - 'export HKLM\SYSTEM'
+  shadow_copy_hive:
+    CommandLine|contains|all:
+      - 'copy'
+      - '\Windows\System32\config\'
+    CommandLine|contains|any:
+      - 'SAM'
+      - 'SECURITY'
+      - 'SYSTEM'
+  vssadmin_shadow:
+    Image|endswith|any:
+      - '\vssadmin.exe'
+      - '\wmic.exe'
+    CommandLine|contains|any:
+      - 'create shadow'
+      - 'shadowcopy create'
+      - 'shadowcopy call create'
+  ntdsutil_hive:
+    Image|endswith: '\ntdsutil.exe'
+    CommandLine|contains|any:
+      - 'ifm'
+      - 'create full'
+      - 'ac i ntds'
+  esentutl_copy:
+    Image|endswith: '\esentutl.exe'
+    CommandLine|contains|any:
+      - '/vss'
+      - 'SAM'
+      - 'SECURITY'
+      - 'SYSTEM'
+      - 'ntds.dit'
+  condition: reg_save_hive or shadow_copy_hive or vssadmin_shadow or ntdsutil_hive or esentutl_copy
+falsepositives:
+  - Authorized backup procedures saving registry hives
+  - System recovery operations
+  - Forensic investigators collecting evidence
+level: critical
+fields:
+  - Image
+  - CommandLine
+  - User
+  - Computer
+  - ParentImage
+custom:
+  mitre_tactic: "TA0006 – Credential Access"
+  mitre_technique: "T1003.002 – OS Credential Dumping: Security Account Manager"
+  chainsaw_compatible: true
+  investigation_note: |
+    Registry hive dumping is almost always malicious unless performed by IT
+    during authorized backup. Check for the presence of the dumped files
+    (sam.save, system.save, etc.) in temp directories. Correlate with
+    subsequent exfiltration or tool execution (secretsdump, mimikatz).
