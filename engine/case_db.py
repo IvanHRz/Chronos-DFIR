@@ -50,7 +50,11 @@ def get_conn() -> duckdb.DuckDBPyConnection:
 
 def _create_schema(conn: duckdb.DuckDBPyConnection):
     """Create all tables if they don't exist."""
-    conn.execute("INSTALL 'uuid'; LOAD 'uuid';")
+    # gen_random_uuid() is built-in since DuckDB 0.10+; uuid extension removed in 1.4+
+    try:
+        conn.execute("INSTALL 'uuid'; LOAD 'uuid';")
+    except Exception:
+        pass  # Already built-in
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS cases (

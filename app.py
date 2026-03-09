@@ -1170,28 +1170,12 @@ async def export_filtered(request: ExportRequest, background_tasks: BackgroundTa
             ]
             if _csv_cast:
                 lf = lf.with_columns(_csv_cast)
-            # Wrap hex-like values (0x...) in Excel formula ="..." to prevent
-            # Excel/Numbers auto-conversion of hex strings to decimal numbers.
-            _hex_prone_kw = {"hash", "hex", "guid", "address", "ostype", "sid"}
-            _hex_col_names = [c for c in _exp_schema.names()
-                              if any(k in c.lower() for k in _hex_prone_kw)
-                              or c in {"OsType", "SrcFileHashId", "Hash", "TargetFileHashId"}]
-            if _hex_col_names:
-                _hex_wrap = [
-                    pl.when(pl.col(c).str.contains(r"^0[xX]"))
-                      .then(pl.concat_str([pl.lit('="'), pl.col(c), pl.lit('"')]))
-                      .otherwise(pl.col(c))
-                      .alias(c)
-                    for c in _hex_col_names
-                    if c in _exp_schema.names()
-                ]
-                if _hex_wrap:
-                    lf = lf.with_columns(_hex_wrap)
-            # Write CSV with UTF-8 BOM so Excel recognizes encoding and preserves text.
-            # quote_style='always' quotes EVERY field unconditionally.
+            # Write CSV with UTF-8 BOM so Excel recognizes encoding.
+            # quote_style='necessary' only quotes fields containing commas/quotes,
+            # preserving hex values (0x...) as plain text without formula wrapping.
             import tempfile
             _tmp_csv = out_path + ".tmp"
-            lf.sink_csv(_tmp_csv, quote_style="always")
+            lf.sink_csv(_tmp_csv, quote_style="necessary")
             # Prepend BOM to force Excel to treat file as UTF-8 text
             with open(_tmp_csv, "rb") as _src, open(out_path, "wb") as _dst:
                 _dst.write(b"\xef\xbb\xbf")  # UTF-8 BOM
