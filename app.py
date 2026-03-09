@@ -655,7 +655,10 @@ async def get_histogram_subset(req: SubsetRequest):
 async def download_file(filename: str, background_tasks: BackgroundTasks):
     file_path = os.path.join(OUTPUT_DIR, filename)
     if os.path.exists(file_path):
-        background_tasks.add_task(delete_file, file_path)
+        # Only auto-delete generated exports, never source CSVs
+        EXPORT_PREFIXES = ("Report_", "ChronosReport_", "ForensicSummary_", "Export_", "Split_")
+        if filename.startswith(EXPORT_PREFIXES):
+            background_tasks.add_task(delete_file, file_path)
         return FileResponse(file_path, filename=filename, media_type='application/octet-stream')
     return JSONResponse(content={"error": "File not found"}, status_code=404)
 
@@ -694,8 +697,8 @@ class ReportRequest(BaseModel):
 def delete_file(path: str):
     import time as _t
     try:
-        # Delay deletion to ensure the browser finishes downloading the file
-        _t.sleep(10)
+        # Delay deletion to ensure browser finishes downloading + PDF chain completes
+        _t.sleep(30)
         if os.path.exists(path):
             os.remove(path)
             logger.info(f"Background cleanup: Deleted {path}")
