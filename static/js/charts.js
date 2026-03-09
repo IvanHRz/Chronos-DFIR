@@ -1,5 +1,5 @@
-import ChronosState from './state.js?v=179';
-import events from './events.js?v=179';
+import ChronosState from './state.js?v=185';
+import events from './events.js?v=185';
 
 export class ChartManager {
     constructor() {
@@ -28,6 +28,17 @@ export class ChartManager {
             if (ChronosState.currentFilename) {
                 this.loadHistogram(ChronosState.currentFilename, null, ChronosState.startTime, ChronosState.endTime, ChronosState.currentColumnFilters);
             }
+        });
+
+        // Debounced: selecting multiple rows fires per-row, avoid API flooding
+        let _selDebounce = null;
+        events.on('SELECTION_CHANGED', () => {
+            clearTimeout(_selDebounce);
+            _selDebounce = setTimeout(() => {
+                if (ChronosState.currentFilename) {
+                    this.loadHistogram(ChronosState.currentFilename, null, ChronosState.startTime, ChronosState.endTime, ChronosState.currentColumnFilters);
+                }
+            }, 400);
         });
 
         events.on('STATE_RESET', () => {
@@ -94,9 +105,10 @@ export class ChartManager {
 
         const datasets = rawData.length ? [...mainDs, meanLineDs] : mainDs;
 
-        // Auto log-scale when peak dominates (ratio > 4x mean avoids flat chart)
-        const autoLog = peakVal > 0 && mean > 0 && (peakVal / mean) > 4;
-        const useLogScale = this.isLogScale || autoLog;
+        // Only use log scale when user explicitly toggles checkbox
+        const useLogScale = this.isLogScale;
+        // Detect when log scale would help (for suggestion in interpretation bar)
+        const logSuggested = peakVal > 0 && mean > 0 && (peakVal / mean) > 4;
 
         this.charts.timeline = new Chart(ctx, {
             type: 'bar',
@@ -107,6 +119,8 @@ export class ChartManager {
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
+                animation: { duration: 300 },
+                transitions: { active: { animation: { duration: 200 } } },
                 scales: {
                     y: {
                         type: useLogScale ? 'logarithmic' : 'linear',
@@ -149,7 +163,7 @@ export class ChartManager {
             const el = document.getElementById(interpretationId);
             if (el) {
                 const peakLabel = data.labels?.[peakIdx] ?? 'N/A';
-                const logNote = autoLog ? ` &nbsp;|&nbsp; <span style="color:#a78bfa"><b>Escala Log</b> (pico ${Math.round(peakVal/mean)}x media)</span>` : '';
+                const logNote = logSuggested ? ` &nbsp;|&nbsp; <span style="color:#a78bfa">💡 Pico ${Math.round(peakVal/mean)}x media — considera activar Log Scale</span>` : '';
                 el.innerHTML =
                     `<b>Tendencia:</b> ${data.interpretation || '—'} &nbsp;|&nbsp; ` +
                     `<span style="color:#e53e3e"><b>⚠ Pico:</b> ${peakVal} ev @ ${peakLabel}</span> &nbsp;|&nbsp; ` +
@@ -182,6 +196,7 @@ export class ChartManager {
             },
             options: {
                 responsive: true,
+                animation: { duration: 300 },
                 plugins: {
                     legend: { position: 'bottom', labels: { color: '#ccc' } }
                 }
@@ -202,6 +217,11 @@ export class ChartManager {
             const hasFilters = Array.isArray(colFilters) ? colFilters.length > 0 : Object.keys(colFilters).length > 0;
             if (hasFilters) params.append('col_filters', JSON.stringify(colFilters));
         }
+        // Send selected_ids so chart reflects row selection
+        const selectedIds = ChronosState.selectedIds || [];
+        if (selectedIds.length > 0) {
+            params.append('selected_ids', JSON.stringify(selectedIds));
+        }
 
         try {
             const response = await fetch(`/api/histogram/${encodeURIComponent(filename)}?${params.toString()}`);
@@ -221,7 +241,14 @@ export class ChartManager {
             const response = await fetch('/api/histogram_subset', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename, selected_ids: selectedIds })
+                body: JSON.stringify({
+                    filename,
+                    selected_ids: selectedIds,
+                    query: ChronosState.currentQuery || "",
+                    start_time: ChronosState.startTime || "",
+                    end_time: ChronosState.endTime || "",
+                    col_filters: JSON.stringify(ChronosState.currentColumnFilters || {})
+                })
             });
 
             if (!response.ok) throw new Error("Subset data fetch failed");

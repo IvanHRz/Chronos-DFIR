@@ -31,8 +31,10 @@ rule macOS_Persistence_LaunchAgent_Suspicious {
         $base64 = "base64" ascii
         $encoded_pl = "EncodedCommand" ascii nocase
     condition:
-        ($plist_header and $plist_key and $run_at_load) and
-        ($bash or $sh or $python or $curl_cmd or $base64)
+        ($plist_header and $plist_key) and
+        ($run_at_load or $keep_alive) and
+        ($launch_agent_path1 or $launch_agent_path2 or $network_connect) and
+        ($bash or $sh or $python or $curl_cmd or $base64 or $encoded_pl)
 }
 
 rule macOS_Persistence_Cron_Job {
@@ -56,7 +58,9 @@ rule macOS_Persistence_Cron_Job {
         $pipe_bash = "| bash" ascii
         $pipe_sh = "| sh" ascii
     condition:
-        ($cron_curl or $cron_wget) and ($pipe_bash or $pipe_sh or $base64_decode or $hidden_dir)
+        ($crontab_header or $cron_bash or $cron_sh or $cron_python) and
+        ($cron_curl or $cron_wget) and
+        ($pipe_bash or $pipe_sh or $base64_decode or $hidden_dir or $var_folder)
 }
 
 rule macOS_Persistence_Login_Item_Suspicious {
@@ -117,5 +121,5 @@ rule macOS_Adware_DYLIB_Injection {
         $tmp_dylib = "/tmp/" ascii
         $hidden_dylib = "/." ascii
     condition:
-        ($dyld_insert or $dyld_force) and ($dylib_ext or $tmp_dylib)
+        ($dyld_insert or $dyld_force or $dyld_path) and ($dylib_ext or $tmp_dylib or $hidden_dylib)
 }

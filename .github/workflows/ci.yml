@@ -1,0 +1,64 @@
+name: Chronos-DFIR CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
+
+      - name: Run parser tests
+        run: python -m pytest tests/test_ingestor.py -v
+
+      - name: Verify app.py constraints
+        run: |
+          # app.py must stay under 2000 lines
+          LINES=$(wc -l < app.py)
+          echo "app.py: $LINES lines"
+          [ "$LINES" -lt 2000 ] || (echo "FAIL: app.py exceeds 2000 lines" && exit 1)
+
+          # No pandas in app.py
+          if grep -q "import pandas" app.py; then
+            echo "FAIL: pandas detected in app.py"
+            exit 1
+          fi
+          echo "All constraints passed"
+
+      - name: Verify Sigma rules load
+        run: |
+          python -c "
+          from engine.sigma_engine import load_sigma_rules
+          rules = load_sigma_rules()
+          print(f'Loaded {len(rules)} Sigma rules')
+          assert len(rules) > 0, 'No Sigma rules loaded'
+          "
+
+      - name: Verify skill registry
+        run: |
+          python -c "
+          from engine.skill_router import get_skill_summary
+          summary = get_skill_summary()
+          total = sum(summary.values())
+          print(f'Skill registry: {total} skills')
+          assert total >= 70, f'Expected 70+ skills, got {total}'
+          "

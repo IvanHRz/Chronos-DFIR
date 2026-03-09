@@ -1,6 +1,6 @@
-import { API } from './api.js?v=179';
-import ChronosState from './state.js?v=179';
-import events from './events.js?v=179';
+import { API } from './api.js?v=185';
+import ChronosState from './state.js?v=185';
+import events from './events.js?v=185';
 
 export class ActionManager {
     constructor(gridManager, chartManager) {
@@ -12,43 +12,346 @@ export class ActionManager {
      * Robust file download: sets isDownloading flag to bypass beforeunload guard,
      * uses an offscreen <a> element with the download attribute.
      */
-    _triggerDownload(url, filename) {
+    _closeExportDropdown() {
+        const menu = document.querySelector('.dropdown-content');
+        if (menu) menu.classList.remove('open');
+    }
+
+    /**
+     * Export forensic summary as CSV from the context modal data
+     */
+    _buildForensicSummaryRows(data, filename) {
+        // Build structured rows with consistent 5-column layout — ALL modal sections
+        const MAX_COLS = 5;
+        const pad = (arr) => { while (arr.length < MAX_COLS) arr.push(""); return arr; };
+        const section = (title) => { rows.push(pad([])); rows.push(pad([`═══ ${title} ═══`])); };
+        const headers = (...cols) => { rows.push(pad(cols)); rows.push(pad(cols.map(() => "────────"))); };
+        const rows = [];
+
+        // ── 1. HEADER METADATA ──
+        rows.push(pad(["═══ CHRONOS-DFIR FORENSIC SUMMARY ═══"]));
+        headers("Field", "Value");
+        rows.push(pad(["File", filename]));
+        rows.push(pad(["Risk Level", `${data.risk_level || 'N/A'} (Score: ${data.risk_score ?? 'N/A'})`]));
+        rows.push(pad(["Primary Identity", data.primary_identity || "N/A"]));
+        rows.push(pad(["Top Tactic", data.top_tactic || "N/A"]));
+        rows.push(pad(["Total Records", String(data.total_records || "N/A")]));
+        rows.push(pad(["Events/Sec", String(data.eps || "0")]));
+
+        // ── 2. RESULTS SECTIONS (timeline, context, hunting, identity) ──
+        if (data.results && Array.isArray(data.results)) {
+            data.results.forEach(s => {
+                if (!s || typeof s !== 'object') return;
+
+                if (s.type === "timeline") {
+                    section("TIMELINE ANALYSIS");
+                    if (s.peaks?.length) {
+                        headers("Peak #", "Hour", "Events");
+                        s.peaks.forEach((p, i) => rows.push(pad([String(i + 1), p.hour || "", String(p.count || 0)])));
+                    }
+                    if (s.time_range) rows.push(pad(["Time Range", s.time_range]));
+                }
+
+                else if (s.type === "context") {
+                    section("SANITIZED FORENSIC SUMMARY");
+                    const lists = [
+                        ["Top IPs", s.ips, "id"],
+                        ["Top Users", s.users, "id"],
+                        ["Top Hosts", s.hosts, "id"],
+                        ["Top Directories", s.paths, "id"],
+                        ["HTTP Methods", s.methods, "id"],
+                        ["Violations", s.violations, "id"],
+                    ];
+                    for (const [label, items, key] of lists) {
+                        if (items?.length) {
+                            rows.push(pad([label]));
+                            headers("Name", "Count");
+                            items.forEach(it => rows.push(pad([String(it[key] || it.name || ""), String(it.count || 0)])));
+                        }
+                    }
+                    if (s.event_ids?.length) {
+                        rows.push(pad(["Top Event IDs"]));
+                        headers("Event ID", "Count");
+                        s.event_ids.forEach(e => rows.push(pad([String(e.id || ""), String(e.count || 0)])));
+                    }
+                    if (s.tactics?.length) {
+                        rows.push(pad(["Tactic Distribution"]));
+                        headers("Tactic", "Count");
+                        s.tactics.forEach(t => rows.push(pad([t.category || "", String(t.count || 0)])));
+                    }
+                }
+
+                else if (s.type === "hunting") {
+                    section("CHRONOS HUNTER SUMMARY");
+                    if (s.patterns?.length) {
+                        rows.push(pad(["SUSPICIOUS PATTERNS DETECTED"]));
+                        headers("Timestamp", "User", "Command");
+                        s.patterns.forEach(p => rows.push(pad([p.timestamp || "", p.user || "", p.command || ""])));
+                    } else {
+                        rows.push(pad(["No suspicious command-line patterns detected."]));
+                    }
+                    if (s.network?.length) {
+                        rows.push(pad(["Top Network Destinations"]));
+                        headers("Destination", "Count");
+                        s.network.forEach(n => rows.push(pad([n.destination || "", String(n.count || 0)])));
+                    }
+                    if (s.logons?.length) {
+                        rows.push(pad(["Authentication / Logon Summary"]));
+                        headers("Event / Category", "Count");
+                        s.logons.forEach(l => {
+                            const key = Object.keys(l).find(k => k !== 'count');
+                            rows.push(pad([key ? String(l[key]) : "", String(l.count || 0)]));
+                        });
+                    }
+                }
+
+                else if (s.type === "identity") {
+                    section("IDENTITY & ASSETS");
+                    const idLists = [
+                        ["Top Users", s.users],
+                        ["Top Hosts", s.hosts],
+                        ["Top Processes", s.processes],
+                        ["Rare Processes (Anomalies)", s.rare_processes],
+                        ["Rare Execution Paths", s.rare_paths],
+                    ];
+                    for (const [label, items] of idLists) {
+                        if (items?.length) {
+                            rows.push(pad([label]));
+                            headers("Name", "Count");
+                            items.forEach(it => rows.push(pad([it.name || "", String(it.count || 0)])));
+                        }
+                    }
+                }
+            });
+        }
+
+        // ── 3. SIGMA DETECTIONS (with evidence rows) ──
+        if (data.sigma_hits?.length) {
+            section("SIGMA RULE DETECTIONS");
+            headers("Level", "Rule", "MITRE Technique", "Matched Events", "Description");
+            for (const h of data.sigma_hits) {
+                rows.push([
+                    h.level?.toUpperCase() || "", h.title || "",
+                    h.mitre_technique || "", String(h.matched_rows || 0), h.description || ""
+                ]);
+                // Include sample evidence rows if available
+                if (h.sample_evidence?.length) {
+                    const evCols = Object.keys(h.sample_evidence[0]).filter(k => k !== '_id').slice(0, 5);
+                    rows.push(pad([`  Evidence (${h.sample_evidence.length} samples):`]));
+                    rows.push(pad(evCols));
+                    for (const ev of h.sample_evidence.slice(0, 10)) {
+                        rows.push(pad(evCols.map(c => String(ev[c] ?? "").substring(0, 200))));
+                    }
+                }
+            }
+            rows.push(pad([]));
+        }
+
+        // ── 4. YARA DETECTIONS ──
+        if (data.yara_hits?.length) {
+            section("YARA DETECTIONS");
+            headers("Rule", "Category", "Tags", "Strings Matched");
+            for (const y of data.yara_hits) {
+                rows.push(pad([y.rule || "", y.namespace || "", (y.tags || []).join(", "), String(y.strings_matched || 0)]));
+            }
+        }
+
+        // ── 5. MITRE KILL CHAIN ──
+        if (data.mitre_kill_chain?.length) {
+            section("MITRE ATT&CK KILL CHAIN");
+            headers("Tactic", "Threat Level", "Count", "Description");
+            for (const m of data.mitre_kill_chain) {
+                rows.push(pad([m.tactic || "", m.threat_level || "", String(m.count || 0), m.description || ""]));
+            }
+        }
+
+        // ── 6. CROSS-SOURCE CORRELATION (new structure) ──
+        const corr = data.cross_source_correlation;
+        if (corr?.chains?.length) {
+            section("CROSS-SOURCE CORRELATION");
+            headers("Pivot Type", "Entity", "Events", "First Seen", "Last Seen");
+            for (const c of corr.chains) {
+                rows.push(pad([c.pivot_type || "", c.entity || "", String(c.total_events || 0), c.first_seen || "", c.last_seen || ""]));
+            }
+        }
+        // Fallback: old results array format
+        if (Array.isArray(data.results) && !corr?.chains?.length) {
+            const oldCorr = data.results.find?.(r => r?.cross_source_correlation);
+            if (oldCorr?.cross_source_correlation?.length) {
+                section("CROSS-SOURCE CORRELATION");
+                headers("Entity", "Type", "Sources", "Events");
+                for (const c of oldCorr.cross_source_correlation) {
+                    rows.push(pad([c.entity || "", c.type || "", (c.sources || []).join(", "), String(c.count || 0)]));
+                }
+            }
+        }
+
+        // ── 7. SESSION PROFILES ──
+        if (data.session_profiles?.length) {
+            section("SESSION PROFILES");
+            headers("IP / Identity", "Requests", "Dwell Time", "Unique Paths", "User Agent");
+            for (const sp of data.session_profiles) {
+                rows.push([sp.ip || sp.identity || "", String(sp.requests || 0), sp.dwell || "",
+                    String(sp.unique_paths || 0), (sp.user_agent || "").substring(0, 100)]);
+            }
+        }
+
+        // ── 8. RISK JUSTIFICATION ──
+        if (data.risk_justify) {
+            section("RISK JUSTIFICATION");
+            const justifyList = Array.isArray(data.risk_justify) ? data.risk_justify : [data.risk_justify];
+            for (const j of justifyList) {
+                rows.push(pad([`• ${j}`]));
+            }
+        }
+
+        return rows;
+    }
+
+    _exportForensicSummaryCSV(data, filename) {
+        const rows = this._buildForensicSummaryRows(data, filename);
+        const csvContent = rows.map(r =>
+            r.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")
+        ).join("\n");
+
+        const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const fname = `Forensic_Summary_${filename.replace(/\.[^.]+$/, '')}.csv`;
         window.isDownloading = true;
         const a = document.createElement('a');
-        a.href = url;
-        a.download = filename || '';
-        a.style.position = 'fixed';
-        a.style.left = '-9999px';
+        a.href = url; a.download = fname;
+        a.style.position = 'fixed'; a.style.left = '-9999px';
         document.body.appendChild(a);
         a.click();
-        setTimeout(() => {
-            document.body.removeChild(a);
+        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); window.isDownloading = false; }, 3000);
+    }
+
+    async _exportForensicSummaryXLSX(data, filename) {
+        // Send forensic summary data to backend for proper XLSX generation with xlsxwriter
+        try {
+            window.isDownloading = true;
+            const resp = await fetch('/api/export/forensic-summary', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filename, summary: data })
+            });
+            if (!resp.ok) throw new Error(`Server error: ${resp.status}`);
+            const result = await resp.json();
+            if (result.download_url) {
+                window.location.href = result.download_url;
+            }
+            setTimeout(() => { window.isDownloading = false; }, 4000);
+        } catch (e) {
+            console.error('XLSX export failed, falling back to CSV:', e);
+            this._exportForensicSummaryCSV(data, filename);
             window.isDownloading = false;
-        }, 3000);
+        }
+    }
+
+    /**
+     * Export filtered data (CSV/Excel/JSON) via /api/export_filtered
+     */
+    async _exportFiltered(filename, format) {
+        try {
+            console.log(`[EXPORT] _exportFiltered('${format}') for ${filename}`);
+            const tbl = this.grid?.table || window.grid?.table;
+
+            // Prioritize ChronosState.selectedIds (source of truth) over grid method
+            let selectedIds = ChronosState.selectedIds || [];
+            if (selectedIds.length === 0) {
+                try { selectedIds = this.grid?.getSelectedIds ? this.grid.getSelectedIds() : []; } catch (e) { /* ignore */ }
+            }
+
+            let visibleCols = [];
+            try {
+                if (tbl) visibleCols = tbl.getColumns().filter(c => c.isVisible() && c.getField() && c.getField() !== '_id').map(c => c.getField());
+            } catch (e) { /* ignore */ }
+
+            let sort_col = null, sort_dir = null;
+            try {
+                if (tbl) {
+                    const sorters = tbl.getSorters();
+                    if (sorters.length > 0) { sort_col = sorters[0].field; sort_dir = sorters[0].dir; }
+                }
+            } catch (e) { /* ignore */ }
+
+            console.log('[EXPORT] Sending:', {
+                query: ChronosState.currentQuery,
+                col_filters: ChronosState.currentColumnFilters,
+                selected_ids: selectedIds.length + ' IDs',
+                start_time: ChronosState.startTime,
+                end_time: ChronosState.endTime
+            });
+            window.isDownloading = true;
+            const result = await API.exportData(filename, {
+                format,
+                query: ChronosState.currentQuery || "",
+                start_time: ChronosState.startTime || "",
+                end_time: ChronosState.endTime || "",
+                col_filters: JSON.stringify(ChronosState.currentColumnFilters || []),
+                selected_ids: selectedIds,
+                visible_columns: visibleCols,
+                sort_col,
+                sort_dir
+            });
+            console.log(`[EXPORT] Response:`, result);
+
+            if (result.download_url) {
+                window.location.href = result.download_url;
+            } else {
+                alert("Export failed: " + (result.error || result.detail || JSON.stringify(result)));
+            }
+        } catch (e) {
+            console.error("[EXPORT] Error:", e);
+            alert("Export error: " + e.message);
+        } finally {
+            setTimeout(() => { window.isDownloading = false; }, 4000);
+        }
+    }
+
+    _triggerDownload(url, filename) {
+        window.isDownloading = true;
+        console.log(`[DOWNLOAD] Triggering: ${url} (${filename})`);
+        this._closeExportDropdown();
+        // Direct location redirect — Content-Disposition: attachment ensures download
+        window.location.href = url;
+        setTimeout(() => { window.isDownloading = false; }, 4000);
     }
 
     // Called automatically after file loads to populate the forensic dashboard bar
+    _dashRequestId = 0;
     async loadDashboardCards() {
         const fileToExport = ChronosState.processedFiles?.csv || ChronosState.currentFilename;
         if (!fileToExport) return;
+        const requestId = ++this._dashRequestId;
+        console.log('[DASHBOARD] Refreshing with:', {
+            query: ChronosState.currentQuery,
+            col_filters: ChronosState.currentColumnFilters,
+            selected_ids: (ChronosState.selectedIds || []).length + ' IDs',
+            start_time: ChronosState.startTime,
+            end_time: ChronosState.endTime
+        });
         try {
             const data = await API.getForensicReport({
                 filename: fileToExport,
-                query: "",
-                col_filters: [],
-                selected_ids: [],
-                start_time: "",
-                end_time: ""
+                query: ChronosState.currentQuery || "",
+                col_filters: JSON.stringify(ChronosState.currentColumnFilters || []),
+                selected_ids: ChronosState.selectedIds || [],
+                start_time: ChronosState.startTime || "",
+                end_time: ChronosState.endTime || ""
             });
+            // Ignore stale responses from previous requests (race condition guard)
+            if (requestId !== this._dashRequestId) return;
             this.renderForensicReport(data, null); // null = don't update modal content
         } catch (e) {
-            // Silent fail — dashboard cards stay empty until user opens Context
+            console.error('[DASHBOARD] Failed to refresh cards:', e.message);
         }
     }
 
     softReset() {
         // Clear all UI state without wiping session
         ChronosState.resetFilters();
+        if (this.grid) this.grid.clearFilters();
 
         const interp = document.getElementById('chart-interpretation');
         if (interp) {
@@ -94,11 +397,19 @@ export class ActionManager {
         const zipFormat = formatSelect ? formatSelect.value : "csv";
 
         try {
-            const sorters = window.grid?.getSorters();
+            const tbl = window.grid?.table;
+            const sorters = tbl?.getSorters() || [];
             let sort_col = null, sort_dir = null;
-            if (sorters && sorters.length > 0) {
+            if (sorters.length > 0) {
                 sort_col = sorters[0].field;
                 sort_dir = sorters[0].dir;
+            }
+
+            let visibleCols = [];
+            if (tbl) {
+                visibleCols = tbl.getColumns()
+                    .filter(c => c.isVisible() && c.getField() && c.getField() !== '_id')
+                    .map(c => c.getField());
             }
 
             const resp = await fetch('/api/export/split-zip', {
@@ -109,13 +420,13 @@ export class ActionManager {
                     chunk_size_mb: parseInt(chunkSize),
                     zip_format: zipFormat,
                     query: ChronosState.currentQuery,
-                    col_filters: ChronosState.currentColumnFilters,
+                    col_filters: JSON.stringify(ChronosState.currentColumnFilters),
                     selected_ids: ChronosState.selectedIds,
                     start_time: ChronosState.startTime || "",
                     end_time: ChronosState.endTime || "",
                     sort_col: sort_col,
                     sort_dir: sort_dir,
-                    visible_columns: window.grid?.getColumns().filter(c => c.isVisible()).map(c => c.getField()) || []
+                    visible_columns: visibleCols
                 })
             });
 
@@ -154,6 +465,15 @@ export class ActionManager {
         }
 
         try {
+            const tbl = this.grid?.table || window.grid?.table;
+            let sort_col = null, sort_dir = null;
+            try {
+                if (tbl) {
+                    const sorters = tbl.getSorters();
+                    if (sorters.length > 0) { sort_col = sorters[0].field; sort_dir = sorters[0].dir; }
+                }
+            } catch (_) { /* ignore */ }
+
             const resp = await fetch('/api/export/html', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -161,9 +481,12 @@ export class ActionManager {
                     filename: fileToExport,
                     original_filename: ChronosState.currentFilename,
                     query: ChronosState.currentQuery,
-                    col_filters: ChronosState.currentColumnFilters,
+                    col_filters: JSON.stringify(ChronosState.currentColumnFilters),
+                    selected_ids: ChronosState.selectedIds || [],
                     start_time: ChronosState.startTime,
-                    end_time: ChronosState.endTime
+                    end_time: ChronosState.endTime,
+                    sort_col: sort_col,
+                    sort_dir: sort_dir
                 })
             });
 
@@ -221,8 +544,8 @@ export class ActionManager {
             const data = await API.getForensicReport({
                 filename: fileToExport,
                 query: ChronosState.currentQuery,
-                col_filters: ChronosState.currentColumnFilters,
-                selected_ids: ChronosState.selectedIds,
+                col_filters: JSON.stringify(ChronosState.currentColumnFilters || []),
+                selected_ids: ChronosState.selectedIds || [],
                 start_time: ChronosState.startTime || "",
                 end_time: ChronosState.endTime || "",
                 sort_col: sort_col,
@@ -242,6 +565,24 @@ export class ActionManager {
                 };
                 expMenu.addEventListener('click', e => e.stopPropagation());
                 document.addEventListener('click', () => expMenu.classList.remove('open'), { once: false });
+            }
+
+            // CSV / Excel forensic summary export from modal
+            const dlCsv = document.getElementById("modal-dl-csv");
+            if (dlCsv) {
+                dlCsv.onclick = (e) => {
+                    e.preventDefault();
+                    expMenu.classList.remove('open');
+                    this._exportForensicSummaryCSV(data, fileToExport);
+                };
+            }
+            const dlXlsx = document.getElementById("modal-dl-xlsx");
+            if (dlXlsx) {
+                dlXlsx.onclick = (e) => {
+                    e.preventDefault();
+                    expMenu.classList.remove('open');
+                    this._exportForensicSummaryXLSX(data, fileToExport);
+                };
             }
 
             // JSON download (clean summary list)
@@ -305,7 +646,8 @@ export class ActionManager {
                                 filename: fileToExport,
                                 original_filename: ChronosState.currentFilename,
                                 query: ChronosState.currentQuery,
-                                col_filters: ChronosState.currentColumnFilters,
+                                col_filters: JSON.stringify(ChronosState.currentColumnFilters || []),
+                                selected_ids: ChronosState.selectedIds || [],
                                 start_time: ChronosState.startTime || "",
                                 end_time: ChronosState.endTime || ""
                             })
@@ -368,7 +710,22 @@ export class ActionManager {
 
         const _badVals = new Set(['null', 'none', 'nan', 'n/a', 'undefined', '-', '']);
         const tacticVal = data.top_tactic && !_badVals.has(String(data.top_tactic).trim().toLowerCase()) ? data.top_tactic : 'N/A';
-        if (tacticEl) tacticEl.innerText = tacticVal;
+        if (tacticEl) {
+            tacticEl.innerText = tacticVal;
+            // Show sigma hit count as subtitle if available
+            const tacticCard = tacticEl.closest('.dash-card');
+            if (tacticCard) {
+                const existingSub = tacticCard.querySelector('.dash-sigma-count');
+                if (existingSub) existingSub.remove();
+                if (data.sigma_hits?.length > 0) {
+                    const sub = document.createElement('span');
+                    sub.className = 'dash-sigma-count';
+                    sub.style.cssText = 'display:block; font-size:0.6rem; color:#f97316; margin-top:2px;';
+                    sub.innerText = `${data.sigma_hits.length} Sigma detection${data.sigma_hits.length > 1 ? 's' : ''}`;
+                    tacticCard.appendChild(sub);
+                }
+            }
+        }
         if (identityEl) identityEl.innerText = data.primary_identity || "N/A";
         if (riskEl) {
             riskEl.innerText = data.risk_level || "Low";
@@ -398,8 +755,48 @@ export class ActionManager {
         }
         if (epsEl) epsEl.innerText = data.eps || "0";
 
-        // Show dashboard if it was hidden
-        document.getElementById('forensic-dash')?.classList.remove('hidden');
+        // Flash animation to indicate data refreshed
+        const dashEl = document.getElementById('forensic-dash');
+        if (dashEl) {
+            dashEl.classList.remove('hidden');
+            dashEl.querySelectorAll('.dash-card').forEach(card => {
+                card.style.transition = 'background-color 0.3s';
+                card.style.backgroundColor = 'rgba(59,130,246,0.15)';
+                setTimeout(() => { card.style.backgroundColor = ''; }, 600);
+            });
+        }
+
+        // TTP Summary Strip — severity badges + top MITRE techniques
+        const ttpStrip = document.getElementById('ttp-summary-strip');
+        if (ttpStrip) {
+            if (data.sigma_hits?.length > 0) {
+                ttpStrip.classList.remove('hidden');
+                const levelCounts = {};
+                const techMap = new Map();
+                const levelColors = { critical: '#ff4d4d', high: '#f59e0b', medium: '#facc15', low: '#4ade80' };
+                data.sigma_hits.forEach(h => {
+                    const lvl = (h.level || 'low').toLowerCase();
+                    levelCounts[lvl] = (levelCounts[lvl] || 0) + (h.matched_rows || 1);
+                    if (h.mitre_technique) {
+                        const tech = h.mitre_technique.split(' ')[0]; // e.g. "T1003.001"
+                        techMap.set(tech, (techMap.get(tech) || 0) + (h.matched_rows || 1));
+                    }
+                });
+                let stripHtml = '<span style="color:#94a3b8;text-transform:uppercase;margin-right:4px;font-weight:600;">TTPs:</span>';
+                for (const [lvl, count] of Object.entries(levelCounts)) {
+                    const col = levelColors[lvl] || '#94a3b8';
+                    stripHtml += `<span class="ttp-badge" style="border-color:${col};color:${col};">${lvl.toUpperCase()}: ${count}</span>`;
+                }
+                const sortedTechs = [...techMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6);
+                sortedTechs.forEach(([tech, cnt]) => {
+                    stripHtml += `<span class="ttp-tech">${tech} (${cnt})</span>`;
+                });
+                ttpStrip.innerHTML = stripHtml;
+            } else {
+                ttpStrip.classList.add('hidden');
+                ttpStrip.innerHTML = '';
+            }
+        }
 
         const riskColors = { Critical: '#ff4d4d', High: '#f59e0b', Medium: '#facc15', Low: '#4ade80' };
         const riskColor = riskColors[data.risk_level] || '#94a3b8';
@@ -611,33 +1008,104 @@ export class ActionManager {
             });
         }
 
-        // --- SIGMA DETECTIONS SECTION ---
+        // --- SIGMA DETECTIONS SECTION (Expandable with Evidence) ---
         if (data.sigma_hits && data.sigma_hits.length > 0) {
             const levelColor = { critical: '#ff4d4d', high: '#f59e0b', medium: '#facc15', low: '#4ade80' };
+            const sigmaId = `sigma-${Date.now()}`;
             html += `
                 <div class="report-section" style="margin-bottom:25px;">
                     <h4 style="color:#f97316; border-bottom:1px solid #333; padding-bottom:8px; margin-bottom:12px; font-size:1.1rem; text-transform:uppercase; letter-spacing:0.5px;">
                         SIGMA RULE DETECTIONS (${data.sigma_hits.length} rules fired)
                     </h4>
                     <div style="font-size:0.85rem; padding:10px; background:rgba(0,0,0,0.25); border-radius:6px; border:1px solid rgba(249,115,22,0.25);">
+                        ${data.sigma_hits.map((h, idx) => {
+                            const color = levelColor[h.level] || '#94a3b8';
+                            const hasEvidence = h.sample_evidence && h.sample_evidence.length > 0;
+                            const evidenceId = `${sigmaId}-ev-${idx}`;
+                            const displayRows = hasEvidence ? h.sample_evidence.slice(0, 10) : [];
+                            const evidenceCols = hasEvidence ? Object.keys(displayRows[0]).filter(k => k !== '_id') : [];
+                            const remaining = h.matched_rows - displayRows.length;
+
+                            let rowHtml = `
+                            <div style="border-top:1px solid rgba(255,255,255,0.05); padding:6px 0;">
+                                <div style="display:flex; align-items:center; gap:8px; cursor:${hasEvidence ? 'pointer' : 'default'}; padding:4px 8px;"
+                                     ${hasEvidence ? `onclick="document.getElementById('${evidenceId}').classList.toggle('hidden')"` : ''}>
+                                    ${hasEvidence ? `<span style="color:#64748b; font-size:0.7rem; width:14px; text-align:center;" id="${evidenceId}-arrow">&#9654;</span>` : '<span style="width:14px;"></span>'}
+                                    <span style="color:${color}; font-weight:700; font-size:0.75rem; text-transform:uppercase; min-width:60px;">${h.level}</span>
+                                    <span style="color:var(--text-primary); flex:1;">${h.title}</span>
+                                    <span style="color:var(--text-secondary); font-size:0.78rem; font-family:monospace; min-width:90px;">${h.mitre_technique || '\u2014'}</span>
+                                    <span style="color:var(--accent-primary); font-weight:600; min-width:50px; text-align:right;">${h.matched_rows}</span>
+                                </div>`;
+
+                            if (hasEvidence) {
+                                rowHtml += `
+                                <div id="${evidenceId}" class="hidden" style="padding:6px 8px 8px 30px;">
+                                    <div style="overflow-x:auto; max-height:280px; overflow-y:auto;">
+                                        <table style="width:100%; border-collapse:collapse; font-size:0.75rem;">
+                                            <thead>
+                                                <tr style="color:var(--text-secondary); font-size:0.68rem; text-transform:uppercase;">
+                                                    <th style="text-align:left; padding:3px 6px; border-bottom:1px solid rgba(255,255,255,0.1);">Row#</th>
+                                                    ${evidenceCols.map(c => `<th style="text-align:left; padding:3px 6px; border-bottom:1px solid rgba(255,255,255,0.1);">${c}</th>`).join('')}
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                ${displayRows.map(row => `
+                                                    <tr style="border-top:1px solid rgba(255,255,255,0.03);">
+                                                        <td style="padding:3px 6px; color:var(--accent-primary); font-family:monospace;">${row._id || ''}</td>
+                                                        ${evidenceCols.map(c => {
+                                                            let val = row[c] != null ? String(row[c]) : '';
+                                                            if (val.length > 120) val = val.substring(0, 120) + '\u2026';
+                                                            return `<td style="padding:3px 6px; color:var(--text-primary); font-family:monospace; font-size:0.72rem; word-break:break-all; max-width:300px;">${val}</td>`;
+                                                        }).join('')}
+                                                    </tr>
+                                                `).join('')}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <div style="display:flex; align-items:center; gap:12px; margin-top:6px;">
+                                        ${remaining > 0 ? `<span style="font-size:0.72rem; color:var(--text-secondary);">+ ${remaining} more rows</span>` : ''}
+                                        ${h.all_row_ids && h.all_row_ids.length > 0 ? `
+                                            <button onclick="window._chronosViewSigmaInGrid && window._chronosViewSigmaInGrid(${JSON.stringify(h.all_row_ids)})"
+                                                style="font-size:0.72rem; padding:3px 10px; background:rgba(249,115,22,0.15); border:1px solid rgba(249,115,22,0.4); border-radius:4px; color:#f97316; cursor:pointer;">
+                                                View all in Grid
+                                            </button>` : ''}
+                                    </div>
+                                </div>`;
+                            }
+                            rowHtml += `</div>`;
+                            return rowHtml;
+                        }).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        // --- YARA DETECTIONS SECTION ---
+        if (data.yara_hits && data.yara_hits.length > 0) {
+            html += `
+                <div class="report-section" style="margin-bottom:25px;">
+                    <h4 style="color:#ef4444; border-bottom:1px solid #333; padding-bottom:8px; margin-bottom:12px; font-size:1.1rem; text-transform:uppercase; letter-spacing:0.5px;">
+                        YARA DETECTIONS (${data.yara_hits.length} rules matched)
+                    </h4>
+                    <div style="font-size:0.85rem; padding:10px; background:rgba(0,0,0,0.25); border-radius:6px; border:1px solid rgba(239,68,68,0.25);">
                         <table style="width:100%; border-collapse:collapse;">
                             <thead>
                                 <tr style="color:var(--text-secondary); font-size:0.75rem; text-transform:uppercase;">
-                                    <th style="text-align:left; padding:4px 8px;">Level</th>
                                     <th style="text-align:left; padding:4px 8px;">Rule</th>
-                                    <th style="text-align:left; padding:4px 8px;">Technique</th>
-                                    <th style="text-align:right; padding:4px 8px;">Events</th>
+                                    <th style="text-align:left; padding:4px 8px;">Category</th>
+                                    <th style="text-align:left; padding:4px 8px;">Tags</th>
+                                    <th style="text-align:right; padding:4px 8px;">Strings</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                ${data.sigma_hits.map(h => `
+                                ${data.yara_hits.map(y => `
                                     <tr style="border-top:1px solid rgba(255,255,255,0.05);">
-                                        <td style="padding:5px 8px;">
-                                            <span style="color:${levelColor[h.level] || '#94a3b8'}; font-weight:700; font-size:0.75rem; text-transform:uppercase;">${h.level}</span>
+                                        <td style="padding:5px 8px; color:#ef4444; font-weight:600;">${y.rule}</td>
+                                        <td style="padding:5px 8px; color:var(--text-secondary); font-size:0.78rem;">${y.namespace || '\u2014'}</td>
+                                        <td style="padding:5px 8px; font-size:0.75rem;">
+                                            ${(y.tags || []).map(t => `<span style="display:inline-block; background:rgba(239,68,68,0.1); color:#f87171; border:1px solid rgba(239,68,68,0.2); padding:1px 6px; border-radius:3px; margin:1px 2px; font-size:0.7rem;">${t}</span>`).join('')}
                                         </td>
-                                        <td style="padding:5px 8px; color:var(--text-primary);">${h.title}</td>
-                                        <td style="padding:5px 8px; color:var(--text-secondary); font-size:0.78rem; font-family:monospace;">${h.mitre_technique || '—'}</td>
-                                        <td style="padding:5px 8px; text-align:right; color:var(--accent-primary); font-weight:600;">${h.matched_rows}</td>
+                                        <td style="padding:5px 8px; text-align:right; color:var(--accent-primary); font-weight:600;">${y.strings_matched}</td>
                                     </tr>
                                 `).join('')}
                             </tbody>
@@ -645,6 +1113,281 @@ export class ActionManager {
                     </div>
                 </div>
             `;
+        }
+
+        // --- MITRE ATT&CK KILL CHAIN SECTION ---
+        if (data.mitre_kill_chain && data.mitre_kill_chain.length > 0) {
+            const tacticColors = {
+                initial_access: '#ef4444', execution: '#f97316', persistence: '#eab308',
+                privilege_escalation: '#84cc16', defense_evasion: '#22c55e',
+                credential_access: '#14b8a6', discovery: '#06b6d4', lateral_movement: '#3b82f6',
+                collection: '#6366f1', command_and_control: '#8b5cf6', exfiltration: '#a855f7',
+                impact: '#ec4899', reconnaissance: '#f43f5e', resource_development: '#fb923c', unknown: '#64748b'
+            };
+            const sevBadge = { critical: '#ff4d4d', high: '#f59e0b', medium: '#facc15', low: '#4ade80' };
+            html += `
+                <div class="report-section" style="margin-bottom:25px;">
+                    <h4 style="color:#a855f7; border-bottom:1px solid #333; padding-bottom:8px; margin-bottom:12px; font-size:1.1rem; text-transform:uppercase; letter-spacing:0.5px;">
+                        MITRE ATT&CK KILL CHAIN (${data.mitre_kill_chain.length} tactics observed)
+                    </h4>
+                    <div style="display:flex; flex-wrap:wrap; gap:10px; padding:10px; background:rgba(0,0,0,0.25); border-radius:6px; border:1px solid rgba(168,85,247,0.25);">
+                        ${data.mitre_kill_chain.map(t => `
+                            <div style="flex:1; min-width:160px; background:rgba(0,0,0,0.3); border-radius:6px; padding:10px; border-left:3px solid ${tacticColors[t.tactic] || '#64748b'};">
+                                <div style="font-size:0.7rem; text-transform:uppercase; color:${tacticColors[t.tactic] || '#64748b'}; font-weight:700; margin-bottom:2px;">
+                                    ${t.tactic_id || ''} ${t.tactic.replace(/_/g, ' ')}
+                                </div>
+                                ${t.tactic_description ? `<div style="font-size:0.65rem; color:var(--text-secondary); margin-bottom:6px; font-style:italic;">${t.tactic_description}</div>` : ''}
+                                ${t.techniques.map(tech => `
+                                    <div style="font-size:0.78rem; color:var(--text-primary); margin-bottom:3px;">
+                                        <span style="font-family:monospace; color:var(--text-secondary); font-size:0.72rem;">${tech.technique || '—'}</span>
+                                        ${tech.title}
+                                        <span style="float:right; color:${sevBadge[tech.level] || '#94a3b8'}; font-size:0.7rem; font-weight:700;">${tech.matched_rows}</span>
+                                    </div>
+                                `).join('')}
+                                <div style="margin-top:6px; font-size:0.68rem; color:var(--text-secondary);">
+                                    Severity: <span style="color:${sevBadge[t.max_severity] || '#94a3b8'}; font-weight:700; text-transform:uppercase;">${t.max_severity}</span>
+                                    &middot; ${t.total_hits} hits
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        // --- CROSS-SOURCE CORRELATION SECTION ---
+        if (data.cross_source_correlation && data.cross_source_correlation.chains && data.cross_source_correlation.chains.length > 0) {
+            const corr = data.cross_source_correlation;
+            const pivotIcon = { ip: '🌐', user: '👤', host: '🖥' };
+            html += `
+                <div class="report-section" style="margin-bottom:25px;">
+                    <h4 style="color:#06b6d4; border-bottom:1px solid #333; padding-bottom:8px; margin-bottom:12px; font-size:1.1rem; text-transform:uppercase; letter-spacing:0.5px;">
+                        CROSS-SOURCE CORRELATION (${corr.total_correlated} events linked)
+                    </h4>
+                    <div style="font-size:0.85rem; padding:10px; background:rgba(0,0,0,0.25); border-radius:6px; border:1px solid rgba(6,182,212,0.25);">
+                        <table style="width:100%; border-collapse:collapse;">
+                            <thead>
+                                <tr style="color:var(--text-secondary); font-size:0.75rem; text-transform:uppercase;">
+                                    <th style="text-align:left; padding:4px 8px;">Pivot</th>
+                                    <th style="text-align:left; padding:4px 8px;">Entity</th>
+                                    <th style="text-align:right; padding:4px 8px;">Events</th>
+                                    <th style="text-align:left; padding:4px 8px;">First Seen</th>
+                                    <th style="text-align:left; padding:4px 8px;">Last Seen</th>
+                                    <th style="text-align:right; padding:4px 8px;">Dwell</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${corr.chains.map(c => {
+                                    const dwell = c.dwell_time_seconds != null
+                                        ? (c.dwell_time_seconds > 3600 ? (c.dwell_time_seconds/3600).toFixed(1) + 'h' : (c.dwell_time_seconds/60).toFixed(0) + 'm')
+                                        : '\u2014';
+                                    const hasRowIds = c.row_ids && c.row_ids.length > 0;
+                                    return `
+                                    <tr style="border-top:1px solid rgba(255,255,255,0.05);">
+                                        <td style="padding:5px 8px;">${pivotIcon[c.pivot_type] || '\uD83D\uDD17'} ${c.pivot_type}</td>
+                                        <td style="padding:5px 8px; font-family:monospace; color:var(--accent-primary); font-size:0.8rem;">
+                                            ${c.pivot_value}
+                                            ${c.sources && c.sources.length > 1 ? `<span style="font-size:0.65rem; color:#a855f7; margin-left:4px;">[${c.sources.length} sources]</span>` : ''}
+                                            ${hasRowIds ? `<button onclick="window._chronosViewSigmaInGrid && window._chronosViewSigmaInGrid(${JSON.stringify(c.row_ids)})"
+                                                style="font-size:0.65rem; padding:1px 6px; margin-left:6px; background:rgba(6,182,212,0.15); border:1px solid rgba(6,182,212,0.4); border-radius:3px; color:#06b6d4; cursor:pointer; vertical-align:middle;">
+                                                View</button>` : ''}
+                                        </td>
+                                        <td style="padding:5px 8px; text-align:right; font-weight:600; color:var(--text-primary);">${c.event_count}</td>
+                                        <td style="padding:5px 8px; font-size:0.75rem; color:var(--text-secondary);">${c.first_seen || '\u2014'}</td>
+                                        <td style="padding:5px 8px; font-size:0.75rem; color:var(--text-secondary);">${c.last_seen || '\u2014'}</td>
+                                        <td style="padding:5px 8px; text-align:right; color:#f59e0b; font-weight:600;">${dwell}</td>
+                                    </tr>`;
+                                }).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
+        // --- SESSION PROFILES SECTION ---
+        if (data.session_profiles && data.session_profiles.length > 0) {
+            html += `
+                <div class="report-section" style="margin-bottom:25px;">
+                    <h4 style="color:#f43f5e; border-bottom:1px solid #333; padding-bottom:8px; margin-bottom:12px; font-size:1.1rem; text-transform:uppercase; letter-spacing:0.5px;">
+                        ATTACKER SESSION PROFILES (${data.session_profiles.length} sources)
+                    </h4>
+                    <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:10px; padding:10px; background:rgba(0,0,0,0.25); border-radius:6px; border:1px solid rgba(244,63,94,0.25);">
+                        ${data.session_profiles.map(s => {
+                            const dwell = s.dwell_time_seconds != null
+                                ? (s.dwell_time_seconds > 3600 ? (s.dwell_time_seconds/3600).toFixed(1) + 'h' : (s.dwell_time_seconds/60).toFixed(0) + 'm')
+                                : '—';
+                            const threat = s.request_count > 500 ? 'HIGH' : s.request_count > 100 ? 'MEDIUM' : 'LOW';
+                            const threatColor = { HIGH: '#ef4444', MEDIUM: '#f59e0b', LOW: '#4ade80' };
+                            return `
+                            <div style="background:rgba(0,0,0,0.3); border-radius:6px; padding:12px; border-left:3px solid ${threatColor[threat]};">
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                                    <span style="font-family:monospace; color:var(--accent-primary); font-size:0.9rem;">${s.attacker_ip}</span>
+                                    <span style="font-size:0.65rem; font-weight:700; color:${threatColor[threat]}; text-transform:uppercase; padding:2px 6px; border:1px solid ${threatColor[threat]}; border-radius:3px;">${threat}</span>
+                                </div>
+                                <div style="font-size:0.78rem; color:var(--text-secondary); line-height:1.6;">
+                                    <div>Requests: <span style="color:var(--text-primary); font-weight:600;">${s.request_count}</span></div>
+                                    <div>Dwell: <span style="color:#f59e0b; font-weight:600;">${dwell}</span></div>
+                                    ${s.unique_paths ? `<div>Unique paths: <span style="color:var(--text-primary);">${s.unique_paths}</span></div>` : ''}
+                                    ${s.user_agent && s.user_agent !== 'N/A' ? `<div style="font-size:0.7rem; margin-top:4px; color:var(--text-secondary); word-break:break-all;">UA: ${s.user_agent}</div>` : ''}
+                                </div>
+                            </div>`;
+                        }).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        // --- EXECUTION ARTIFACTS SECTION (only if real data exists) ---
+        if (data.execution_artifacts && data.execution_artifacts.artifact_types_detected && data.execution_artifacts.artifact_types_detected.length > 0) {
+            const arts = data.execution_artifacts;
+            const artifactIcons = { shimcache: '🗃', amcache: '📦', prefetch: '⚡', srum: '📊', generic_execution_refs: '🔍' };
+            // Filter to types that actually have items
+            const typesWithData = arts.artifact_types_detected.filter(type => {
+                const items = type === 'generic_execution_refs' ? (arts.generic_refs || []) : (arts[type] || []);
+                return items.length > 0;
+            });
+            if (typesWithData.length > 0) {
+                html += `
+                    <div class="report-section" style="margin-bottom:25px;">
+                        <h4 style="color:#22c55e; border-bottom:1px solid #333; padding-bottom:8px; margin-bottom:12px; font-size:1.1rem; text-transform:uppercase; letter-spacing:0.5px;">
+                            EXECUTION ARTIFACTS (${typesWithData.join(', ')})
+                        </h4>
+                        <div style="padding:10px; background:rgba(0,0,0,0.25); border-radius:6px; border:1px solid rgba(34,197,94,0.25);">
+                            ${typesWithData.map(type => {
+                                const items = type === 'generic_execution_refs' ? (arts.generic_refs || []) : (arts[type] || []);
+                                return `
+                                <div style="margin-bottom:12px;">
+                                    <div style="font-size:0.8rem; font-weight:700; color:#22c55e; text-transform:uppercase; margin-bottom:6px;">
+                                        ${artifactIcons[type] || '📄'} ${type.replace(/_/g, ' ')} (${items.length} entries)
+                                    </div>
+                                    <div style="font-size:0.75rem; font-family:monospace; max-height:200px; overflow-y:auto;">
+                                        ${items.map(item => `
+                                            <div style="padding:3px 8px; border-bottom:1px solid rgba(255,255,255,0.03); color:var(--text-secondary);">
+                                                ${Object.entries(item).map(([k,v]) => `<span style="color:var(--text-secondary)">${k}:</span> <span style="color:var(--text-primary)">${String(v).substring(0,120)}</span>`).join(' &middot; ')}
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                </div>`;
+                            }).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        // --- THREAT INTELLIGENCE ENRICHMENT SECTION ---
+        if (data.threat_intelligence && data.threat_intelligence.total_enriched > 0) {
+            const ti = data.threat_intelligence;
+            const countryFlags = {
+                US:'🇺🇸',GB:'🇬🇧',DE:'🇩🇪',FR:'🇫🇷',CN:'🇨🇳',RU:'🇷🇺',JP:'🇯🇵',KR:'🇰🇷',
+                BR:'🇧🇷',IN:'🇮🇳',AU:'🇦🇺',CA:'🇨🇦',NL:'🇳🇱',IT:'🇮🇹',ES:'🇪🇸',SE:'🇸🇪',
+                UA:'🇺🇦',IR:'🇮🇷',KP:'🇰🇵',RO:'🇷🇴',PL:'🇵🇱',MX:'🇲🇽',AR:'🇦🇷',CL:'🇨🇱',
+            };
+            const getFlag = (cc) => countryFlags[cc] || '🏴';
+            const abuseColor = (score) => score > 75 ? '#ef4444' : score > 25 ? '#f59e0b' : '#4ade80';
+            const vtColor = (m) => m > 5 ? '#ef4444' : m > 0 ? '#f59e0b' : '#4ade80';
+
+            html += `
+                <div class="report-section" style="margin-bottom:25px;">
+                    <h4 style="color:#8b5cf6; border-bottom:1px solid #333; padding-bottom:8px; margin-bottom:12px; font-size:1.1rem; text-transform:uppercase; letter-spacing:0.5px;">
+                        THREAT INTELLIGENCE ENRICHMENT (${ti.total_enriched} IOCs enriched)
+                    </h4>
+                    <div style="font-size:0.7rem; color:var(--text-secondary); margin-bottom:10px;">
+                        Providers: ${(ti.providers_used || []).join(', ')}
+                    </div>`;
+
+            // IP enrichment
+            if (ti.ip_enrichment && ti.ip_enrichment.length > 0) {
+                html += `
+                    <div style="margin-bottom:15px;">
+                        <div style="font-size:0.8rem; font-weight:700; color:#8b5cf6; margin-bottom:8px;">IP ADDRESSES</div>
+                        <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:8px;">
+                            ${ti.ip_enrichment.map(ip => {
+                                const geo = ip.geo || {};
+                                const abuse = ip.abuse || {};
+                                const vt = ip.vt || {};
+                                const abuseScore = abuse.abuse_confidence || 0;
+                                return `
+                                <div style="background:rgba(0,0,0,0.3); border-radius:6px; padding:10px; border-left:3px solid ${abuseColor(abuseScore)}; cursor:pointer;"
+                                     onclick="window._chronosLookupIOC && window._chronosLookupIOC('${ip.ip}', 'ip')">
+                                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                                        <span style="font-family:monospace; color:var(--accent-primary); font-size:0.9rem;">${ip.ip}</span>
+                                        ${geo.country_code ? `<span style="font-size:0.85rem;">${getFlag(geo.country_code)} ${geo.country_code}</span>` : ''}
+                                    </div>
+                                    <div style="font-size:0.75rem; color:var(--text-secondary); line-height:1.6;">
+                                        ${geo.isp ? `<div>ISP: <span style="color:var(--text-primary);">${geo.isp}</span></div>` : ''}
+                                        ${geo.asn ? `<div>ASN: <span style="color:var(--text-primary);">${geo.asn}</span></div>` : ''}
+                                        ${geo.city ? `<div>Location: <span style="color:var(--text-primary);">${geo.city}, ${geo.region || ''}</span></div>` : ''}
+                                        ${abuse.abuse_confidence !== undefined ? `<div>Abuse Score: <span style="font-weight:700; color:${abuseColor(abuseScore)};">${abuseScore}%</span> (${abuse.total_reports || 0} reports)</div>` : ''}
+                                        ${vt.malicious !== undefined ? `<div>VirusTotal: <span style="font-weight:700; color:${vtColor(vt.malicious)};">${vt.malicious} malicious</span> / ${vt.harmless || 0} clean</div>` : ''}
+                                    </div>
+                                </div>`;
+                            }).join('')}
+                        </div>
+                    </div>`;
+            }
+
+            // Domain enrichment
+            if (ti.domain_enrichment && ti.domain_enrichment.length > 0) {
+                html += `
+                    <div style="margin-bottom:15px;">
+                        <div style="font-size:0.8rem; font-weight:700; color:#8b5cf6; margin-bottom:8px;">DOMAINS</div>
+                        <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:8px;">
+                            ${ti.domain_enrichment.map(d => {
+                                const uh = d.urlhaus || {};
+                                const vt = d.vt || {};
+                                const isMalicious = (vt.malicious || 0) > 0 || uh.query_status === 'is_host';
+                                return `
+                                <div style="background:rgba(0,0,0,0.3); border-radius:6px; padding:10px; border-left:3px solid ${isMalicious ? '#ef4444' : '#4ade80'};">
+                                    <div style="font-family:monospace; color:var(--accent-primary); font-size:0.85rem; margin-bottom:6px;">${d.domain}</div>
+                                    <div style="font-size:0.75rem; color:var(--text-secondary); line-height:1.6;">
+                                        ${uh.query_status ? `<div>URLhaus: <span style="color:${uh.query_status === 'is_host' ? '#ef4444' : 'var(--text-primary)'}; font-weight:600;">${uh.query_status}</span> ${uh.urls_total ? `(${uh.urls_total} URLs)` : ''}</div>` : ''}
+                                        ${uh.threat_type ? `<div>Threat: <span style="color:#f59e0b;">${uh.threat_type}</span></div>` : ''}
+                                        ${vt.malicious !== undefined ? `<div>VirusTotal: <span style="font-weight:700; color:${vtColor(vt.malicious)};">${vt.malicious} malicious</span></div>` : ''}
+                                    </div>
+                                </div>`;
+                            }).join('')}
+                        </div>
+                    </div>`;
+            }
+
+            // Hash enrichment
+            if (ti.hash_enrichment && ti.hash_enrichment.length > 0) {
+                html += `
+                    <div style="margin-bottom:15px;">
+                        <div style="font-size:0.8rem; font-weight:700; color:#8b5cf6; margin-bottom:8px;">FILE HASHES</div>
+                        ${ti.hash_enrichment.map(h => {
+                            const vt = h.vt || {};
+                            return `
+                            <div style="background:rgba(0,0,0,0.3); border-radius:6px; padding:8px 12px; margin-bottom:4px; border-left:3px solid ${vtColor(vt.malicious || 0)};">
+                                <span style="font-family:monospace; font-size:0.75rem; color:var(--accent-primary);">${h.hash}</span>
+                                ${vt.malicious !== undefined ? `<span style="float:right; font-size:0.75rem; font-weight:700; color:${vtColor(vt.malicious)};">${vt.malicious}/${(vt.malicious||0)+(vt.harmless||0)+(vt.undetected||0)} detections</span>` : ''}
+                                ${vt.popular_threat_name ? `<div style="font-size:0.7rem; color:#f59e0b; margin-top:2px;">${vt.popular_threat_name}</div>` : ''}
+                            </div>`;
+                        }).join('')}
+                    </div>`;
+            }
+
+            // Email enrichment (HIBP)
+            if (ti.email_enrichment && ti.email_enrichment.length > 0) {
+                html += `
+                    <div style="margin-bottom:15px;">
+                        <div style="font-size:0.8rem; font-weight:700; color:#8b5cf6; margin-bottom:8px;">CREDENTIAL BREACHES</div>
+                        ${ti.email_enrichment.map(e => {
+                            const hibp = e.hibp || {};
+                            const breached = (hibp.breach_count || 0) > 0;
+                            return `
+                            <div style="background:rgba(0,0,0,0.3); border-radius:6px; padding:8px 12px; margin-bottom:4px; border-left:3px solid ${breached ? '#ef4444' : '#4ade80'};">
+                                <span style="font-family:monospace; font-size:0.8rem; color:var(--accent-primary);">${e.email}</span>
+                                <span style="float:right; font-size:0.75rem; font-weight:700; color:${breached ? '#ef4444' : '#4ade80'};">${hibp.breach_count || 0} breaches</span>
+                                ${breached && hibp.breaches ? `<div style="font-size:0.7rem; color:var(--text-secondary); margin-top:4px;">${hibp.breaches.join(', ')}</div>` : ''}
+                            </div>`;
+                        }).join('')}
+                    </div>`;
+            }
+
+            html += `</div>`;
         }
 
         if (container) container.innerHTML = html;

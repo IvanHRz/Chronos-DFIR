@@ -472,19 +472,81 @@
             .kpi-grid, .chart-row { break-inside: avoid; }
             .kpi-card { background: #f1f5f9 !important; border: 1px solid #cbd5e1 !important; color: #000 !important; }
             .kpi-card .val { color: #1e3a8a !important; }
+            .kpi-card.risk-Critical .val { color: #dc2626 !important; }
+            .kpi-card.risk-High .val { color: #ea580c !important; }
+            .kpi-card.risk-Medium .val { color: #d97706 !important; }
+            .kpi-card.risk-Low .val { color: #16a34a !important; }
             .kpi-card .sub { color: #475569 !important; }
             .panel { background: #f8fafc !important; border: 1px solid #cbd5e1 !important; break-inside: avoid; }
             .panel-title { color: #1e3a8a !important; border-color: #cbd5e1 !important; }
             .context-table { color: #000 !important; break-inside: avoid; }
-            .context-table th { background: #e2e8f0 !important; color: #334155 !important; }
+            .context-table,
+            .context-table td { background: #ffffff !important; }
+            .context-table th { background: #f1f5f9 !important; color: #334155 !important; }
             .context-table td { color: #1e293b !important; border-color: #e2e8f0 !important; }
+            .context-table tr:nth-child(even) td { background: #f8fafc !important; }
             .context-table tr { break-inside: avoid; }
             ul.top-list li { color: #000 !important; border-color: #e2e8f0 !important; }
             ul.top-list li .name { color: #1e293b !important; }
             ul.top-list li .count { background: #dbeafe !important; color: #1d4ed8 !important; }
             .tactic-badge { background: #dbeafe !important; color: #1d4ed8 !important; }
+            .tactic-badge.level-critical { background: #fee2e2 !important; color: #dc2626 !important; }
+            .tactic-badge.level-high { background: #ffedd5 !important; color: #ea580c !important; }
+            .tactic-badge.level-medium { background: #fef3c7 !important; color: #d97706 !important; }
+            .snippet-box { background: #f1f5f9 !important; color: #1e293b !important; border: 1px solid #94a3b8 !important; }
             .warning-banner { background: #fff7ed !important; color: #92400e !important; border-color: #f97316 !important; }
+            .chart-color-legend { color: #334155 !important; }
             a { color: #1d4ed8 !important; }
+
+            /* Force dark-theme inline styles to print-safe colors for JS-generated content */
+            #sigma-detections-content, #hunting-analytics-content, #context-analytics-content {
+                color: #1e293b !important;
+            }
+            #sigma-detections-content table,
+            #hunting-analytics-content table,
+            #context-analytics-content table {
+                background: #ffffff !important;
+            }
+            #sigma-detections-content table td,
+            #hunting-analytics-content table td,
+            #context-analytics-content table td {
+                background: #ffffff !important;
+                color: #1e293b !important;
+                border-color: #e2e8f0 !important;
+            }
+            #sigma-detections-content table tr:nth-child(even) td,
+            #hunting-analytics-content table tr:nth-child(even) td,
+            #context-analytics-content table tr:nth-child(even) td {
+                background: #f8fafc !important;
+            }
+            #sigma-detections-content table th,
+            #hunting-analytics-content table th,
+            #context-analytics-content table th {
+                background: #f1f5f9 !important;
+                color: #334155 !important;
+                border-color: #e2e8f0 !important;
+            }
+            /* Sigma rule blocks */
+            .sigma-rule-block { border-color: #cbd5e1 !important; }
+            .sigma-rule-block > div:first-child { background: #f1f5f9 !important; }
+            .sigma-rule-title { color: #1e293b !important; }
+            .sigma-technique { color: #475569 !important; }
+            .sigma-count { color: #1d4ed8 !important; }
+            .sigma-desc { color: #475569 !important; }
+            .sigma-level-badge { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+            .sigma-evidence-details { color: #334155 !important; }
+            .sigma-evidence-details summary { color: #1d4ed8 !important; }
+            /* Force details open in print */
+            details.sigma-evidence-details { display: block !important; }
+            details.sigma-evidence-details > summary { display: none !important; }
+            details.sigma-evidence-details > div { display: block !important; }
+            /* Hunting inline color overrides */
+            #hunting-analytics-content tr td { color: #1e293b !important; }
+            #hunting-analytics-content h4 { color: #92400e !important; }
+            /* Risk justification in KPI card */
+            .kpi-card div[style*="background: rgba"] { background: #f1f5f9 !important; color: #1e293b !important; }
+            .kpi-card div[style*="background: rgba"] strong { color: #475569 !important; }
+            .kpi-card div[style*="background: rgba"] div { color: #1e293b !important; }
         }
     </style>
 </head>
@@ -547,6 +609,12 @@
             <h3 class="panel-title">Activity Timeline</h3>
             <div class="chart-wrapper">
                 <canvas id="timelineChart"></canvas>
+            </div>
+            <div class="chart-color-legend" style="display:flex; gap:16px; margin-top:8px; font-size:0.72rem; color:#94a3b8; flex-wrap:wrap;">
+                <span><span style="display:inline-block;width:11px;height:11px;background:rgba(229,62,62,0.85);border-radius:2px;vertical-align:middle;"></span> Peak</span>
+                <span><span style="display:inline-block;width:11px;height:11px;background:rgba(237,137,54,0.75);border-radius:2px;vertical-align:middle;"></span> &gt;1.5x mean</span>
+                <span><span style="display:inline-block;width:11px;height:11px;background:rgba(99,179,237,0.70);border-radius:2px;vertical-align:middle;"></span> Normal</span>
+                <span><span style="display:inline-block;width:20px;height:2px;background:#f6ad55;border-top:2px dashed #f6ad55;vertical-align:middle;"></span> Average</span>
             </div>
         </div>
         <div class="lists-container">
@@ -1079,27 +1147,47 @@
             renderThreatActors(THREAT_ACTORS);
         }
 
-        // Render Sigma Detections
+        // Render Sigma Detections with expandable evidence tables
         if (SIGMA_HITS && SIGMA_HITS.length > 0) {
-            const levelColor = { critical: '#ff4d4d', high: '#f59e0b', medium: '#facc15', low: '#4ade80' };
-            let sh = `<table style="width:100%; border-collapse:collapse; font-size:0.85rem;">
-                <thead><tr style="color:#94a3b8; font-size:0.75rem; text-transform:uppercase; border-bottom:1px solid rgba(255,255,255,0.1);">
-                    <th style="text-align:left; padding:6px 10px;">Level</th>
-                    <th style="text-align:left; padding:6px 10px;">Rule</th>
-                    <th style="text-align:left; padding:6px 10px;">Technique</th>
-                    <th style="text-align:right; padding:6px 10px;">Events</th>
-                </tr></thead><tbody>`;
-            SIGMA_HITS.forEach(h => {
+            const levelColor = { critical: '#dc2626', high: '#ea580c', medium: '#d97706', low: '#16a34a' };
+            const levelBg = { critical: '#fee2e2', high: '#ffedd5', medium: '#fef3c7', low: '#dcfce7' };
+            let sh = '';
+            SIGMA_HITS.forEach((h, idx) => {
                 const lvl = (h.level || 'low').toLowerCase();
-                const col = levelColor[lvl] || '#94a3b8';
-                sh += `<tr style="border-top:1px solid rgba(255,255,255,0.05);">
-                    <td style="padding:6px 10px;"><span style="color:${col}; font-weight:700; font-size:0.8rem; text-transform:uppercase;">${h.level}</span></td>
-                    <td style="padding:6px 10px; color:var(--text-primary);">${escapeHtml(h.title)}</td>
-                    <td style="padding:6px 10px; color:#94a3b8; font-family:monospace; font-size:0.78rem;">${escapeHtml(h.mitre_technique || '—')}</td>
-                    <td style="padding:6px 10px; text-align:right; color:#60a5fa; font-weight:600;">${h.matched_rows}</td>
-                </tr>`;
+                const col = levelColor[lvl] || '#64748b';
+                const bg = levelBg[lvl] || '#f1f5f9';
+                sh += `<div class="sigma-rule-block" style="margin-bottom:12px; border:1px solid rgba(100,116,139,0.3); border-radius:6px; overflow:hidden;">
+                    <div style="display:flex; align-items:center; gap:10px; padding:8px 12px; background:rgba(0,0,0,0.15);">
+                        <span class="sigma-level-badge" style="display:inline-block; padding:2px 8px; border-radius:4px; font-weight:700; font-size:0.75rem; text-transform:uppercase; background:${bg}; color:${col};">${escapeHtml(h.level)}</span>
+                        <span class="sigma-rule-title" style="flex:1; font-weight:600; font-size:0.85rem;">${escapeHtml(h.title)}</span>
+                        <span class="sigma-technique" style="font-family:monospace; font-size:0.75rem; color:#94a3b8;">${escapeHtml(h.mitre_technique || '—')}</span>
+                        <span class="sigma-count" style="font-weight:700; color:#60a5fa; font-size:0.85rem;">${h.matched_rows} events</span>
+                    </div>`;
+                if (h.description) {
+                    sh += `<div class="sigma-desc" style="padding:4px 12px; font-size:0.78rem; color:#94a3b8;">${escapeHtml(h.description)}</div>`;
+                }
+                // Expandable evidence table
+                if (h.sample_evidence && h.sample_evidence.length > 0) {
+                    const cols = Object.keys(h.sample_evidence[0]).filter(c => c !== '_id');
+                    sh += `<details class="sigma-evidence-details" style="padding:0 12px 8px;">
+                        <summary style="cursor:pointer; font-size:0.75rem; color:#60a5fa; padding:4px 0; user-select:none;">Show ${h.sample_evidence.length} evidence rows (${cols.length} columns)</summary>
+                        <div style="overflow-x:auto; margin-top:6px;">
+                        <table class="context-table" style="width:100%; border-collapse:collapse; font-size:0.72rem;">
+                            <thead><tr>${cols.map(c => `<th style="padding:4px 6px; text-align:left; white-space:nowrap; background:rgba(0,0,0,0.2); color:#94a3b8; font-size:0.68rem; text-transform:uppercase;">${escapeHtml(c)}</th>`).join('')}</tr></thead>
+                            <tbody>`;
+                    h.sample_evidence.forEach(row => {
+                        sh += '<tr>';
+                        cols.forEach(c => {
+                            const v = row[c] != null ? String(row[c]) : '';
+                            const truncated = v.length > 120 ? v.substring(0, 120) + '…' : v;
+                            sh += `<td style="padding:3px 6px; border-top:1px solid rgba(255,255,255,0.04); word-break:break-all; max-width:300px;" title="${escapeHtml(v)}">${escapeHtml(truncated)}</td>`;
+                        });
+                        sh += '</tr>';
+                    });
+                    sh += `</tbody></table></div></details>`;
+                }
+                sh += '</div>';
             });
-            sh += '</tbody></table>';
             document.getElementById('sigma-detections-content').innerHTML = sh;
             document.getElementById('sigma-container').style.display = 'block';
         }

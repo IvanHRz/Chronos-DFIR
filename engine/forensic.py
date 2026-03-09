@@ -11,13 +11,13 @@ logger = logging.getLogger("chronos.engine")
 
 # Forensic Hierarchies for Time and Event Identification
 TIME_HIERARCHY = [
-    "EventTime", "ProcessLaunchTime", "FirstSeen", 
-    "LogReceivedTime", "LastSeen", "timestamp", 
+    "EventTime", "ProcessLaunchTime", "FirstSeen",
+    "LogReceivedTime", "LastSeen", "timestamp",
     "time", "date", "datetime", "utc"
 ]
 
 EVENT_ID_HIERARCHY = [
-    "WinEventId", "EventId", "EventID", 
+    "WinEventId", "EventId", "EventID",
     "Id", "ID", "EventName"
 ]
 
@@ -46,7 +46,7 @@ def get_primary_time_column(columns: List[str]) -> Optional[str]:
         for col in columns:
             if col.lower() == h_col.lower():
                 return col
-                
+
     # 2. Fallback: Generic keywords (prefer non-timezone first, then allow timezone as last resort)
     candidates = ['time', 'timestamp', 'date', 'datetime', 'seen', 'created']
     timezone_fallback = None
@@ -59,7 +59,7 @@ def get_primary_time_column(columns: List[str]) -> Optional[str]:
             return col
     if timezone_fallback:
         return timezone_fallback
-            
+
     return None
 
 def sanitize_context_data(lf: pl.LazyFrame) -> pl.LazyFrame:
@@ -70,17 +70,17 @@ def sanitize_context_data(lf: pl.LazyFrame) -> pl.LazyFrame:
     try:
         schema = lf.collect_schema()
         cols = schema.names()
-        
+
         # 1. Find the best Event ID source using global hierarchy
         eid_col = None
         for h_col in EVENT_ID_HIERARCHY:
             if h_col in cols:
                 eid_col = h_col
                 break
-        
+
         # 2. Apply Sanitization Expressions
         exprs = []
-        
+
         # --- Event ID Validation ---
         if eid_col:
             # Cast to string, strip .0, cast to int, and filter range
@@ -88,12 +88,12 @@ def sanitize_context_data(lf: pl.LazyFrame) -> pl.LazyFrame:
                 pl.col(eid_col).cast(pl.Utf8)
                 .str.replace(r"\.0$", "", literal=False)
                 .cast(pl.Int64, strict=False)
-                # Using map_elements for compatibility with newer Polars if necessary, 
+                # Using map_elements for compatibility with newer Polars if necessary,
                 # but staying with the functional equivalent of the original .apply()
                 .map_elements(lambda x: x if x is not None and 0 < x < 65535 else None, return_dtype=pl.Int64)
                 .alias("Validated_EventID")
             )
-        
+
         if exprs:
             return lf.with_columns(exprs)
         return lf
@@ -129,7 +129,7 @@ def normalize_time_columns_in_df(lf: pl.LazyFrame) -> pl.LazyFrame:
                     elif dtype in [pl.String, pl.Utf8]:
                         # Cleaning: Remove timezone offsets for simpler parsing
                         c_clean = c.str.replace(r"[\+\-]\d{2}:\d{2}$", "", literal=False).str.replace("Z$", "", literal=False)
-                        
+
                         # Prepare for Epoch in String check
                         is_hex = c.str.contains(r"^0x[0-9a-fA-F]+$", literal=False)
                         c_float = pl.when(is_hex).then(None).otherwise(c.cast(pl.Float64, strict=False))
@@ -148,7 +148,7 @@ def normalize_time_columns_in_df(lf: pl.LazyFrame) -> pl.LazyFrame:
                             c_clean.str.to_datetime("%Y/%m/%d %H:%M:%S", strict=False),
                             c_clean.str.to_datetime("%d/%m/%Y %H:%M:%S", strict=False),
                         ])
-                        
+
                         lf = lf.with_columns(parsed_date.dt.strftime("%Y-%m-%d %H:%M:%S").alias(col_name))
 
                 except Exception as e:
@@ -302,7 +302,7 @@ def sub_analyze_context(df: pl.DataFrame) -> dict:
             stats["metadata"]["total_attackers_profiled"] = len(profiles)
         except Exception as _we:
             logger.warning(f"WAF profiling in context failed: {_we}")
-    
+
     # Event ID column — expanded to cover XDR/EDR formats
     event_col = next((
         c for c in df_s.columns if c.lower() in [
@@ -571,6 +571,13 @@ def generate_waf_threat_profiles(df: pl.DataFrame) -> list:
     except ImportError:
         def unquote(s): return s  # type: ignore
 
+    def _decode_waf_payload(raw: str) -> str:
+        """Decode WAF payloads: handles double-encoding, hex-encoded chars."""
+        if not raw:
+            return raw
+        decoded = unquote(unquote(raw))  # Double-decode for double-encoded payloads
+        return decoded[:200]
+
     def _clean_vc(raw_list) -> dict:
         result = {}
         if not isinstance(raw_list, list):
@@ -599,7 +606,7 @@ def generate_waf_threat_profiles(df: pl.DataFrame) -> list:
         clean_payloads = []
         for p in (raw_payloads if isinstance(raw_payloads, list) else []):
             if p and str(p).strip():
-                clean_payloads.append(unquote(str(p))[:200])
+                clean_payloads.append(_decode_waf_payload(str(p)))
 
         # Try to assign MITRE ID from rule name
         rule_top = list(_clean_vc(row.get("Top_Rules_raw") or {}).keys())
@@ -735,7 +742,7 @@ def sub_analyze_hunting(df: pl.DataFrame) -> dict:
     """Hunting and Pattern Detection Sub-task"""
     hunt_data = apply_hunter_logic(df)
     stats = {"type": "hunting", "patterns": [], "network": [], "logons": []}
-    
+
     if hunt_data["patterns"]:
         meta = hunt_data.get("_meta", {})
         for p in hunt_data["patterns"][:15]:
@@ -745,14 +752,14 @@ def sub_analyze_hunting(df: pl.DataFrame) -> dict:
             cmd = (str(cmd) or "")[:250] # increased limit to preserve tactic tags
             row_id = p.get(meta.get("id_col")) if meta.get("id_col") else p.get("_id")
             stats["patterns"].append({"timestamp": ts, "user": usr, "command": cmd, "source_row_id": row_id})
-    
+
     if hunt_data["network"].get("destinations"):
         for d in hunt_data["network"]["destinations"][:5]:
             stats["network"].append({"destination": d['Clean_Dst'], "count": d['count']})
 
     if hunt_data["network"].get("logons"):
         stats["logons"] = hunt_data["network"]["logons"][:5]
-            
+
     return stats
 
 def sub_analyze_identity_and_procs(df: pl.DataFrame) -> dict:
@@ -811,7 +818,7 @@ def sub_analyze_identity_and_procs(df: pl.DataFrame) -> dict:
                 stats["rare_paths"] = [{"name": str(row[path_col])[:100], "count": row['count']} for row in path_rare.iter_rows(named=True)]
         except Exception:
             pass
-            
+
     return stats
 
 def apply_hunter_logic(df: pl.DataFrame) -> dict:
@@ -819,16 +826,16 @@ def apply_hunter_logic(df: pl.DataFrame) -> dict:
     Applies logic from 'chronos_hunter_summary' skill to a collected DataFrame.
     """
     res = {"identity": {}, "network": {}, "patterns": []}
-    
+
     if df.is_empty():
         return res
-        
+
     # 1. Identity
     try:
         host_col = next((c for c in df.columns if c.lower() in ["hostname", "computer", "computername"]), None)
         if host_col:
             res["identity"]["hosts"] = df.filter(pl.col(host_col).is_not_null()).group_by(host_col).agg(pl.len().alias("count")).sort("count", descending=True).head(10).to_dicts()
-        
+
         user_col = next((c for c in df.columns if c.lower() in ["processuser", "user", "username", "accountname"]), None)
         if user_col:
             res["identity"]["users"] = df.filter(pl.col(user_col).is_not_null()).group_by(user_col).agg(pl.len().alias("count")).sort("count", descending=True).head(10).to_dicts()
@@ -841,7 +848,7 @@ def apply_hunter_logic(df: pl.DataFrame) -> dict:
         if dst_col:
             clean_df = df.with_columns(pl.col(dst_col).cast(pl.Utf8, strict=False).str.replace_all(r"\[|\]|'", "").alias("Clean_Dst"))
             res["network"]["destinations"] = clean_df.filter(pl.col("Clean_Dst").is_not_null() & (pl.col("Clean_Dst") != "")).group_by("Clean_Dst").agg(pl.len().alias("count")).sort("count", descending=True).head(10).to_dicts()
-        
+
         # Add Logon Event Detection from Skills
         event_name_col = next((c for c in df.columns if c.lower() in ["eventid", "eventname", "task", "category"]), None)
         if event_name_col:
@@ -867,25 +874,25 @@ def apply_hunter_logic(df: pl.DataFrame) -> dict:
             "Path Traversal/LFI (OWASP/MITRE)": r"(?i)(\.\./\.\./|%2e%2e%2f|/etc/passwd|windows\\win\.ini|boot\.ini)",
             "Command Injection (OWASP/MITRE)": r"(?i)(;\s*ls\s*-|\|\s*bash|`.*`|;\s*cat\s+/etc/)"
         }
-        
+
         master_regex = "|".join([f"({pat})" for pat in ttps.values()])
-        
+
         # Flexibly map the command/process/message column for various input types
         cmd_col = next((c for c in df.columns if c.lower() in ["processcmd", "commandline", "command", "cmdline", "process", "imagepath", "message", "description", "request", "uri", "details"]), None)
-        
+
         if cmd_col:
             susp_df = df.filter(
                 pl.col(cmd_col).cast(pl.Utf8, strict=False)
                 .str.contains(master_regex)
                 .fill_null(False)
             )
-            
+
             if not susp_df.is_empty():
                 ts_col = next((c for c in df.columns if c.lower() in ["trueeventtime", "eventtime", "time", "timestamp", "date", "@timestamp"]), None)
                 proc_host_col = next((c for c in df.columns if c.lower() in ["hostname", "computer", "computername", "system", "host"]), None)
                 proc_col = next((c for c in df.columns if c.lower() in ["processname", "image", "process", "task", "provider"]), None)
                 u_col = next((c for c in df.columns if c.lower() in ["processuser", "user", "username", "accountname", "subjectusername"]), None)
-                
+
                 cols_to_select = []
                 # Fallback to No. if _id is not present
                 id_col = "_id" if "_id" in df.columns else ("No." if "No." in df.columns else None)
@@ -895,13 +902,13 @@ def apply_hunter_logic(df: pl.DataFrame) -> dict:
                 if proc_col: cols_to_select.append(proc_col)
                 if u_col: cols_to_select.append(u_col)
                 cols_to_select.append(cmd_col)
-                
+
                 # Make sure columns are unique
                 cols_to_select = list(dict.fromkeys(cols_to_select))
-                
+
                 # Apply extraction limit and deduplicate on the command column to remove noise
                 patterns_list = susp_df.select(cols_to_select).unique(subset=[cmd_col], keep="first").head(30).to_dicts()
-                
+
                 # Tag occurrences with matching TTPs
                 for row_dict in patterns_list:
                     cmd_value = str(row_dict.get(cmd_col, ""))
@@ -921,7 +928,7 @@ def apply_hunter_logic(df: pl.DataFrame) -> dict:
                 }
     except Exception as e:
         logger.warning(f"Error in hunter patterns logic: {e}")
-            
+
     return res
 
 
@@ -943,7 +950,7 @@ def ingest_json_file(file_path: str) -> pl.LazyFrame:
         with open(file_path, "rb") as f:
             first_byte = f.read(1)
             f.seek(0)
-            
+
             if first_byte == b'[':
                 # It's a JSON array. For small files, read_json is fine.
                 # For large files, we need to stream it.
@@ -955,7 +962,7 @@ def ingest_json_file(file_path: str) -> pl.LazyFrame:
                     # This is a bit slow but safe.
                     tmp_ndjson = file_path + ".tmp.ndjson"
                     import ijson # We will hope it is available or fallback
-                    
+
                     try:
                         import ijson
                         with open(file_path, "rb") as f_in, open(tmp_ndjson, "w") as f_out:
@@ -966,7 +973,7 @@ def ingest_json_file(file_path: str) -> pl.LazyFrame:
                         # Fallback: Simple character-based chunking (Risky but better than OOM)
                         logger.warning("ijson not found. Using fallback JSON streaming.")
                         # This fallback is highly specific to a flat list of objects
-                        return pl.read_json(file_path).lazy() 
+                        return pl.read_json(file_path).lazy()
             else:
                 # Might be a single JSON object or malformed
                 return pl.read_json(file_path).lazy()
@@ -982,10 +989,10 @@ def apply_standard_processing(lf: pl.LazyFrame, params: dict) -> pl.LazyFrame:
     """
     # 1. Forensic Sanitization
     lf = sanitize_context_data(lf)
-    
+
     schema = lf.collect_schema()
     all_cols = schema.names()
-    
+
     # 2. Filters
     # Global Search — token-based AND search
     # Each space-separated token must appear in at least one column (AND logic between
@@ -1032,7 +1039,7 @@ def apply_standard_processing(lf: pl.LazyFrame, params: dict) -> pl.LazyFrame:
                 col_filters = json.loads(col_filters)
             except:
                 col_filters = []
-        
+
         if isinstance(col_filters, list):
             # Form: [{'field': 'col', 'value': 'val', 'type': 'like'}]
             for f in col_filters:
@@ -1040,7 +1047,7 @@ def apply_standard_processing(lf: pl.LazyFrame, params: dict) -> pl.LazyFrame:
                 val = f.get('value')
                 typ = f.get('type')
                 if not col or val is None: continue
-                
+
                 c_expr = pl.col(col)
                 if typ == "like":
                     lf = lf.filter(c_expr.cast(pl.Utf8).str.to_lowercase().str.contains(str(val).lower(), literal=True))
@@ -1079,8 +1086,16 @@ def apply_standard_processing(lf: pl.LazyFrame, params: dict) -> pl.LazyFrame:
             except:
                 selected_ids = []
         if isinstance(selected_ids, list) and len(selected_ids) > 0:
-            _id_exists = "_id" in lf.collect_schema().names()
+            schema_names = lf.collect_schema().names()
+            _id_exists = "_id" in schema_names
+            logger.info(f"[SELECTED_IDS] Filtering by {len(selected_ids)} IDs: {selected_ids[:10]}... _id_exists={_id_exists}")
             if _id_exists:
+                selected_ids_str = [str(x) for x in selected_ids]
+                lf = lf.filter(pl.col("_id").cast(pl.Utf8).is_in(selected_ids_str))
+            else:
+                # Generate _id if missing and then filter
+                logger.warning("[SELECTED_IDS] _id column not found, generating it before filtering")
+                lf = lf.with_row_index(name="_id", offset=1)
                 selected_ids_str = [str(x) for x in selected_ids]
                 lf = lf.filter(pl.col("_id").cast(pl.Utf8).is_in(selected_ids_str))
 
@@ -1118,7 +1133,7 @@ def apply_standard_processing(lf: pl.LazyFrame, params: dict) -> pl.LazyFrame:
     # 4. User Sort and Indexing
     sort_col = params.get('sort_col')
     sort_dir = params.get('sort_dir')
-    
+
     if sort_col and sort_dir:
         _current_cols = lf.collect_schema().names()
         is_no_sort = (sort_col.lower() in ["no.", "_id"])
@@ -1131,18 +1146,485 @@ def apply_standard_processing(lf: pl.LazyFrame, params: dict) -> pl.LazyFrame:
             try:
                 # Optimized sort: Try numeric first, then fallback to alpha
                 lf = lf.sort(
-                    by=[pl.col(sort_col).cast(pl.Float64, strict=False), pl.col(sort_col)], 
+                    by=[pl.col(sort_col).cast(pl.Float64, strict=False), pl.col(sort_col)],
                     descending=[desc_user, desc_user]
                 )
             except:
                 lf = lf.sort(sort_col, descending=desc_user)
-        
+
     return lf
+
+# =============================================================================
+# SKILL 15: Chronos Correlation Architect — Cross-source event correlation
+# =============================================================================
+def correlate_cross_source(df: pl.DataFrame, time_window_minutes: int = 5) -> dict:
+    """
+    Correlates events across sources using entity pivoting and time windows.
+    Returns attack chains: groups of events linked by shared IPs, users, or hosts
+    within a configurable time window.
+    """
+    try:
+        time_col = get_primary_time_column(df.columns)
+        if not time_col:
+            return {"chains": [], "total_correlated": 0, "correlation_type": "none"}
+
+        # Ensure time column is datetime
+        schema = df.schema
+        if time_col in schema and not isinstance(schema[time_col], pl.Datetime):
+            df = df.with_columns(
+                pl.col(time_col).str.to_datetime(strict=False).alias(time_col)
+            )
+
+        # Time window threshold for correlation clustering
+        window_threshold = pl.duration(minutes=time_window_minutes)
+
+        # Detect pivot columns (entities to correlate on)
+        pivot_candidates = {
+            "ip": [c for c in df.columns if c.lower() in (
+                "sourceip", "src_ip", "srcip", "clientip", "source_ip",
+                "destinationip", "dst_ip", "dstip", "dest_ip", "remoteaddress",
+                "ipaddress", "ip_address", "ip")],
+            "user": [c for c in df.columns if c.lower() in (
+                "user", "username", "account", "targetusername",
+                "subjectusername", "sourceuser", "accountname")],
+            "host": [c for c in df.columns if c.lower() in (
+                "computer", "hostname", "host", "computername",
+                "workstation", "machinename")],
+        }
+
+        chains = []
+        chain_id = 0
+
+        # For each pivot type, find clusters of events sharing the same entity
+        for pivot_type, cols in pivot_candidates.items():
+            for col in cols:
+                if col not in df.columns:
+                    continue
+                # Group by entity, find entities involved in multiple event types
+                entity_groups = (
+                    df.filter(pl.col(col).is_not_null() & (pl.col(col).cast(pl.Utf8) != ""))
+                    .group_by(col)
+                    .agg([
+                        pl.len().alias("event_count"),
+                        pl.col(time_col).min().alias("first_seen"),
+                        pl.col(time_col).max().alias("last_seen"),
+                    ])
+                    .filter(pl.col("event_count") > 2)
+                    # Filter by time window: only correlate events within the window
+                    .filter((pl.col("last_seen") - pl.col("first_seen")) <= window_threshold)
+                    .sort("event_count", descending=True)
+                    .head(10)
+                )
+
+                if entity_groups.height == 0:
+                    continue
+
+                # Detect if multiple source types exist for richer correlation
+                source_col = next((c for c in df.columns if c.lower() in (
+                    "source", "logsource", "provider", "channel", "log_type",
+                    "sourcetype", "eventlog")), None)
+
+                for row in entity_groups.iter_rows(named=True):
+                    first = row.get("first_seen")
+                    last = row.get("last_seen")
+                    dwell = None
+                    if first and last:
+                        try:
+                            dwell = (last - first).total_seconds()
+                        except Exception:
+                            dwell = None
+
+                    # Count distinct source types + extract row IDs for this entity
+                    sources_involved = []
+                    entity_row_ids = []
+                    try:
+                        entity_val = row[col]
+                        src_df = df.filter(pl.col(col).cast(pl.Utf8) == str(entity_val))
+                        if "_id" in src_df.columns:
+                            entity_row_ids = src_df["_id"].to_list()[:150]
+                        if source_col and source_col in src_df.columns:
+                            sources_involved = src_df.select(
+                                pl.col(source_col).drop_nulls().unique()
+                            ).to_series().to_list()[:5]
+                    except Exception:
+                        pass
+
+                    # Risk: high event count + short dwell = likely automated attack
+                    risk = "high" if row["event_count"] > 20 else "medium" if row["event_count"] > 5 else "low"
+
+                    chain_id += 1
+                    chains.append({
+                        "chain_id": chain_id,
+                        "pivot_type": pivot_type,
+                        "pivot_value": str(row[col]),
+                        "event_count": row["event_count"],
+                        "first_seen": str(first) if first else "N/A",
+                        "last_seen": str(last) if last else "N/A",
+                        "dwell_time_seconds": dwell,
+                        "risk": risk,
+                        "sources": sources_involved,
+                        "row_ids": entity_row_ids,
+                    })
+
+        # Sort chains by event count
+        chains.sort(key=lambda x: x["event_count"], reverse=True)
+
+        return {
+            "chains": chains[:20],
+            "total_correlated": sum(c["event_count"] for c in chains),
+            "correlation_type": "entity_pivot",
+            "pivot_types_used": list({c["pivot_type"] for c in chains}),
+        }
+    except Exception as e:
+        logger.error(f"Correlation error: {e}")
+        return {"chains": [], "total_correlated": 0, "error": str(e)}
+
+
+# =============================================================================
+# SKILL 44: Chronos MITRE Strategist — Enhanced auto-mapping
+# (Extends existing enrich_with_mitre_attck with behavioral sub-technique precision)
+# =============================================================================
+def map_mitre_from_sigma(sigma_hits: list) -> list:
+    """
+    Takes sigma_hits and generates a structured MITRE ATT&CK kill chain view.
+    Groups detections by tactic phase for attack narrative reconstruction.
+    """
+    if not sigma_hits:
+        return []
+
+    # MITRE tactic ordering (kill chain) with human-readable labels
+    TACTIC_META = {
+        "reconnaissance":       (1,  "TA0043", "Gathering target information"),
+        "resource_development": (2,  "TA0042", "Building attack infrastructure"),
+        "initial_access":       (3,  "TA0001", "Gaining initial foothold"),
+        "execution":            (4,  "TA0002", "Running malicious code"),
+        "persistence":          (5,  "TA0003", "Maintaining access"),
+        "privilege_escalation": (6,  "TA0004", "Gaining higher permissions"),
+        "defense_evasion":      (7,  "TA0005", "Avoiding detection"),
+        "credential_access":    (8,  "TA0006", "Stealing credentials"),
+        "discovery":            (9,  "TA0007", "Exploring the environment"),
+        "lateral_movement":     (10, "TA0008", "Moving through the network"),
+        "collection":           (11, "TA0009", "Gathering target data"),
+        "command_and_control":  (12, "TA0011", "Communicating with C2"),
+        "exfiltration":         (13, "TA0010", "Stealing data out"),
+        "impact":               (14, "TA0040", "Disrupting operations"),
+    }
+    TACTIC_ORDER = {k: v[0] for k, v in TACTIC_META.items()}
+
+    # Map ta00XX directory names to tactic names
+    TA_DIR_MAP = {
+        "ta0001": "initial_access", "ta0002": "execution", "ta0003": "persistence",
+        "ta0004": "privilege_escalation", "ta0005": "defense_evasion",
+        "ta0006": "credential_access", "ta0007": "discovery", "ta0008": "lateral_movement",
+        "ta0009": "collection", "ta0010": "exfiltration", "ta0011": "command_and_control",
+        "ta0040": "impact", "ta0042": "resource_development", "ta0043": "reconnaissance",
+    }
+
+    tactic_map = {}  # tactic -> list of techniques
+
+    for hit in sigma_hits:
+        technique = hit.get("mitre_technique", "")
+        level = hit.get("level", "low")
+        title = hit.get("title", "Unknown")
+        matched = hit.get("matched_rows", 0)
+
+        # Extract tactic from tags first
+        tactic = "unknown"
+        tags = hit.get("tags", []) or []
+        for tag in tags:
+            t = tag.replace("attack.", "").replace("-", "_").lower()
+            if t in TACTIC_ORDER:
+                tactic = t
+                break
+
+        # Fallback: extract from rule file path (e.g., rules/sigma/ta0002_execution/...)
+        if tactic == "unknown":
+            rule_file = hit.get("file", "") or ""
+            for ta_code, ta_name in TA_DIR_MAP.items():
+                if ta_code in rule_file.lower():
+                    tactic = ta_name
+                    break
+
+        if tactic not in tactic_map:
+            tactic_map[tactic] = []
+
+        tactic_map[tactic].append({
+            "technique": technique,
+            "title": title,
+            "level": level,
+            "matched_rows": matched,
+        })
+
+    # Build kill chain view sorted by tactic order
+    kill_chain = []
+    for tactic, techniques in sorted(tactic_map.items(),
+                                      key=lambda x: TACTIC_ORDER.get(x[0], 99)):
+        meta = TACTIC_META.get(tactic, (99, "—", ""))
+        kill_chain.append({
+            "tactic": tactic,
+            "tactic_id": meta[1],
+            "tactic_description": meta[2],
+            "tactic_order": meta[0],
+            "techniques": techniques,
+            "total_hits": sum(t["matched_rows"] for t in techniques),
+            "max_severity": max(
+                (t["level"] for t in techniques),
+                key=lambda l: {"critical": 4, "high": 3, "medium": 2, "low": 1}.get(l, 0)
+            ),
+        })
+
+    return kill_chain
+
+
+# =============================================================================
+# SKILL 50: Chronos Session Grouper — Attacker profiling & session clustering
+# =============================================================================
+def group_sessions(df: pl.DataFrame) -> list:
+    """
+    Groups events into attacker sessions based on source IP + time proximity.
+    Returns structured attacker profiles with behavioral summary.
+    """
+    try:
+        time_col = get_primary_time_column(df.columns)
+
+        # Find IP column
+        ip_candidates = [c for c in df.columns if c.lower() in (
+            "sourceip", "src_ip", "srcip", "clientip", "source_ip",
+            "ipaddress", "ip_address", "ip", "remoteaddress")]
+
+        if not ip_candidates:
+            return []
+
+        ip_col = ip_candidates[0]
+
+        # Filter valid IPs
+        df_valid = df.filter(
+            pl.col(ip_col).is_not_null() &
+            (pl.col(ip_col).cast(pl.Utf8) != "") &
+            (pl.col(ip_col).cast(pl.Utf8) != "-")
+        )
+
+        if df_valid.height == 0:
+            return []
+
+        # Build aggregation expressions
+        agg_exprs = [pl.len().alias("request_count")]
+
+        if time_col and time_col in df_valid.columns:
+            schema = df_valid.schema
+            if time_col in schema and not isinstance(schema[time_col], pl.Datetime):
+                df_valid = df_valid.with_columns(
+                    pl.col(time_col).str.to_datetime(strict=False).alias(time_col)
+                )
+            agg_exprs.extend([
+                pl.col(time_col).min().alias("first_seen"),
+                pl.col(time_col).max().alias("last_seen"),
+            ])
+
+        # Detect user-agent column
+        ua_col = next((c for c in df_valid.columns
+                       if c.lower() in ("useragent", "user_agent", "user-agent", "ua")), None)
+        if ua_col:
+            agg_exprs.append(pl.col(ua_col).drop_nulls().first().alias("sample_ua"))
+
+        # Detect path/URI column
+        path_col = next((c for c in df_valid.columns
+                         if c.lower() in ("requestpath", "uri", "url", "path",
+                                          "target_uri", "request_uri", "cs-uri-stem")), None)
+        if path_col:
+            agg_exprs.append(pl.col(path_col).drop_nulls().n_unique().alias("unique_paths"))
+
+        # Detect HTTP method column
+        method_col = next((c for c in df_valid.columns
+                           if c.lower() in ("method", "httpmethod", "cs-method",
+                                            "request_method", "verb")), None)
+        if method_col:
+            agg_exprs.append(pl.col(method_col).drop_nulls().value_counts(sort=True).head(3).alias("top_methods_raw"))
+
+        # Detect status code column
+        status_col = next((c for c in df_valid.columns
+                           if c.lower() in ("status", "statuscode", "sc-status",
+                                            "response_code", "http_status")), None)
+        if status_col:
+            agg_exprs.append(pl.col(status_col).drop_nulls().value_counts(sort=True).head(3).alias("top_status_raw"))
+
+        # Group by IP
+        profiles = (
+            df_valid.group_by(ip_col)
+            .agg(agg_exprs)
+            .sort("request_count", descending=True)
+            .head(15)
+        )
+
+        results = []
+        for row in profiles.iter_rows(named=True):
+            profile = {
+                "attacker_ip": str(row[ip_col]),
+                "request_count": row["request_count"],
+            }
+            if "first_seen" in row and row["first_seen"]:
+                profile["first_seen"] = str(row["first_seen"])
+                profile["last_seen"] = str(row.get("last_seen", ""))
+                try:
+                    profile["dwell_time_seconds"] = (
+                        row["last_seen"] - row["first_seen"]
+                    ).total_seconds()
+                except Exception:
+                    profile["dwell_time_seconds"] = None
+            if "sample_ua" in row:
+                ua = str(row["sample_ua"] or "")
+                profile["user_agent"] = ua[:120] if ua else "N/A"
+            if "unique_paths" in row:
+                profile["unique_paths"] = row["unique_paths"]
+            if "top_methods_raw" in row and row["top_methods_raw"] is not None:
+                try:
+                    methods = row["top_methods_raw"]
+                    if isinstance(methods, list):
+                        profile["top_methods"] = [str(list(m.values())[0]) for m in methods if isinstance(m, dict)][:3]
+                except Exception:
+                    pass
+            if "top_status_raw" in row and row["top_status_raw"] is not None:
+                try:
+                    statuses = row["top_status_raw"]
+                    if isinstance(statuses, list):
+                        profile["top_status_codes"] = [str(list(s.values())[0]) for s in statuses if isinstance(s, dict)][:3]
+                except Exception:
+                    pass
+
+            results.append(profile)
+
+        return results
+
+    except Exception as e:
+        logger.error(f"Session grouper error: {e}")
+        return []
+
+
+# =============================================================================
+# SKILL 45: Chronos Execution Forensics — Shimcache/Amcache/Prefetch detection
+# =============================================================================
+def detect_execution_artifacts(df: pl.DataFrame) -> dict:
+    """
+    Detects execution artifact patterns in ingested CSV data.
+    Works with pre-parsed Shimcache/Amcache/Prefetch/SRUM exports
+    (e.g., from Eric Zimmerman tools, KAPE, or similar).
+    """
+    try:
+        cols_lower = {c.lower(): c for c in df.columns}
+        findings = {
+            "shimcache": [],
+            "amcache": [],
+            "prefetch": [],
+            "srum": [],
+            "artifact_types_detected": [],
+        }
+
+        # Shimcache detection (AppCompatCache)
+        shimcache_markers = {"controlset", "appcompatcache", "shimcache",
+                             "cache_entry", "cacheentry"}
+        if any(m in " ".join(cols_lower.keys()) for m in shimcache_markers) or \
+           any(c for c in cols_lower if "lastmodified" in c and "path" in " ".join(cols_lower.keys())):
+            findings["artifact_types_detected"].append("shimcache")
+            path_col = next((cols_lower[c] for c in cols_lower
+                             if c in ("path", "filepath", "file_path", "cache_path")), None)
+            if path_col:
+                suspicious_paths = df.filter(
+                    pl.col(path_col).cast(pl.Utf8).str.contains(
+                        r"(?i)(\\temp\\|\\appdata\\|\\downloads\\|\\public\\|\.exe$|\.dll$|\.ps1$|\.bat$|\.vbs$)"
+                    )
+                )
+                if suspicious_paths.height > 0:
+                    findings["shimcache"] = suspicious_paths.head(10).select(
+                        [c for c in df.columns[:6]]
+                    ).to_dicts()
+
+        # Amcache detection (InventoryApplicationFile)
+        amcache_markers = {"amcache", "inventoryapplication", "sha1",
+                           "originalfilename", "programid"}
+        if any(m in " ".join(cols_lower.keys()) for m in amcache_markers):
+            findings["artifact_types_detected"].append("amcache")
+            sha1_col = next((cols_lower[c] for c in cols_lower if "sha1" in c), None)
+            name_col = next((cols_lower[c] for c in cols_lower
+                             if c in ("name", "filename", "originalfilename", "file")), None)
+            if name_col:
+                suspicious = df.filter(
+                    pl.col(name_col).cast(pl.Utf8).str.contains(
+                        r"(?i)(\.exe|\.dll|\.ps1|\.bat|\.vbs|\.hta|\.scr)"
+                    )
+                )
+                if suspicious.height > 0:
+                    select_cols = [name_col]
+                    if sha1_col:
+                        select_cols.append(sha1_col)
+                    findings["amcache"] = suspicious.head(10).select(
+                        select_cols
+                    ).to_dicts()
+
+        # Prefetch detection
+        prefetch_markers = {"prefetch", "runcount", "run_count", "executable",
+                            "pf_filename"}
+        if any(m in " ".join(cols_lower.keys()) for m in prefetch_markers):
+            findings["artifact_types_detected"].append("prefetch")
+            exec_col = next((cols_lower[c] for c in cols_lower
+                             if c in ("executable", "executablefilename",
+                                      "pf_filename", "sourcefile")), None)
+            run_col = next((cols_lower[c] for c in cols_lower
+                            if c in ("runcount", "run_count", "executioncount")), None)
+            if exec_col:
+                select = [exec_col]
+                if run_col:
+                    select.append(run_col)
+                findings["prefetch"] = df.select(select).head(10).to_dicts()
+
+        # SRUM detection (System Resource Usage Monitor)
+        srum_markers = {"bytesin", "bytesout", "bytes_in", "bytes_out",
+                        "foregroundcycletime", "backgroundcycletime",
+                        "networkusage"}
+        if any(m in " ".join(cols_lower.keys()) for m in srum_markers):
+            findings["artifact_types_detected"].append("srum")
+            bytes_cols = [cols_lower[c] for c in cols_lower
+                          if any(m in c for m in ("bytesin", "bytesout", "bytes_in", "bytes_out"))]
+            app_col = next((cols_lower[c] for c in cols_lower
+                            if c in ("appid", "application", "exeinfo", "app")), None)
+            if app_col and bytes_cols:
+                select = [app_col] + bytes_cols[:2]
+                findings["srum"] = df.select(select).head(10).to_dicts()
+
+        # General execution pattern detection (works on ANY log type)
+        if not findings["artifact_types_detected"]:
+            # Check for execution-related columns in generic logs
+            exec_patterns = []
+            for col in df.columns:
+                if df.schema[col] == pl.Utf8:
+                    try:
+                        matches = df.filter(
+                            pl.col(col).str.contains(
+                                r"(?i)(shimcache|amcache|prefetch|appcompatcache|inventoryapplication)"
+                            )
+                        )
+                        if matches.height > 0:
+                            exec_patterns.append({
+                                "column": col,
+                                "pattern_matches": matches.height,
+                                "sample": str(matches.head(1).to_dicts()[0].get(col, ""))[:200]
+                            })
+                    except Exception:
+                        continue
+            if exec_patterns:
+                findings["artifact_types_detected"].append("generic_execution_refs")
+                findings["generic_refs"] = exec_patterns[:5]
+
+        return findings
+
+    except Exception as e:
+        logger.error(f"Execution forensics error: {e}")
+        return {"error": str(e), "artifact_types_detected": []}
+
 
 def calculate_smart_risk_m4(df_parsed: pl.DataFrame, df_iocs: pl.DataFrame = None, sigma_hits: list = None) -> dict:
     """
     Skill de Antigravity: Calcula el nivel de riesgo contextual de la evidencia.
-    Ignora el tamaño del archivo y se centra en la Inteligencia de Amenazas y 
+    Ignora el tamaño del archivo y se centra en la Inteligencia de Amenazas y
     anomalías temporales usando Polars.
     """
     risk_score = 0
@@ -1188,7 +1670,7 @@ def calculate_smart_risk_m4(df_parsed: pl.DataFrame, df_iocs: pl.DataFrame = Non
         is_lazy = isinstance(df_parsed, pl.LazyFrame)
         cols = df_parsed.collect_schema().names() if is_lazy else df_parsed.columns
         time_col = next((c for c in cols if c.lower() in ["timestamp", "time", "date", "eventtime", "trueeventtime", "@timestamp"]), None)
-        
+
         if time_col:
             # Polars exige que la tabla esté ordenada cronológicamente para group_by_dynamic
             try:
@@ -1197,18 +1679,18 @@ def calculate_smart_risk_m4(df_parsed: pl.DataFrame, df_iocs: pl.DataFrame = Non
                 df_time = lf_time.collect(streaming=True)
             except Exception:
                 df_time = pl.DataFrame()
-                
+
             if df_time.height > 0:
                 spikes = (
                     df_time.group_by_dynamic(time_col, every="1m")
                     .agg(pl.len().alias("event_count"))
                 )
-                
+
                 if spikes.height > 0:
                     mean_events = spikes.select(pl.col("event_count").mean()).item()
                     max_events = spikes.select(pl.col("event_count").max()).item()
-                    
-                    # Heurística de Pico: Si el minuto más activo tiene 5x más eventos que el promedio 
+
+                    # Heurística de Pico: Si el minuto más activo tiene 5x más eventos que el promedio
                     # y supera un umbral base (ej. 100 eventos/min), es una anomalía real.
                     if mean_events > 0 and max_events > (mean_events * 5) and max_events > 100:
                         risk_score += 20
@@ -1252,7 +1734,7 @@ def extract_fallback_metrics(df: pl.DataFrame) -> dict:
     para alimentar los gráficos cuando no hay línea de tiempo.
     """
     metrics = {}
-    
+
     # Extraemos las columnas que realmente existen en el DataFrame dinámicamente
     available_cols = df.columns
 
@@ -1277,7 +1759,7 @@ def extract_fallback_metrics(df: pl.DataFrame) -> dict:
 
     return metrics
 
-def generate_export_payloads(df: pl.DataFrame) -> dict:
+def generate_export_payloads(df: pl.DataFrame, yara_hits: list | None = None) -> dict:
     """
     Recibe un DataFrame (idealmente filtrado de la vista actual), extrae inteligencia accionable (URLs, IPs, Errores)
     y genera los payloads exactos para los botones 'Context' (JSON) y 'Graphical Report' (HTML).
@@ -1285,7 +1767,7 @@ def generate_export_payloads(df: pl.DataFrame) -> dict:
     try:
         if df.is_empty():
             return {"context_json": "{}", "html_data": {}}
-            
+
         # 1. CHAIN OF CUSTODY
         # Ensure it has a reliable Row ID tracker if it doesn't already
         if "Source_Row_ID" not in df.columns:
@@ -1293,7 +1775,7 @@ def generate_export_payloads(df: pl.DataFrame) -> dict:
                 df = df.with_columns(pl.col("_id").alias("Source_Row_ID"))
             else:
                 df = df.with_row_index("Source_Row_ID")
-        
+
         # Determine the columns to use. Try unified schema first, fallback to raw
         cols = df.columns
         msg_col = "Destination_Entity" if "Destination_Entity" in cols else ("message" if "message" in cols else [c for c in cols if df[c].dtype == pl.Utf8][0])
@@ -1302,7 +1784,7 @@ def generate_export_payloads(df: pl.DataFrame) -> dict:
 
         # 2. IOC EXTRACTION (URLs/IPs)
         ioc_regex = r"(https?://[^\s]+|\b(?:\d{1,3}\.){3}\d{1,3}\b)"
-        
+
         try:
             df_iocs = (
                 df.filter(pl.col(msg_col).str.contains(ioc_regex))
@@ -1324,7 +1806,7 @@ def generate_export_payloads(df: pl.DataFrame) -> dict:
                     pl.col("Source_Row_ID").first().alias("first_seen_row"),
                     pl.col("Source_Row_ID").last().alias("last_seen_row")
                 ])
-                .filter(pl.col("event_count") > 50) 
+                .filter(pl.col("event_count") > 50)
                 .sort("event_count", descending=True)
             )
             noise_detected = df_anomalies.height
@@ -1398,7 +1880,12 @@ def generate_export_payloads(df: pl.DataFrame) -> dict:
                 "eps": timeline_data.get("eps", 0),
             },
             "identity_analysis": identity_data if isinstance(identity_data, dict) else {},
-            "sigma_detections": sigma_hits
+            "sigma_detections": sigma_hits,
+            "mitre_kill_chain": map_mitre_from_sigma(sigma_hits),
+            "cross_source_correlation": correlate_cross_source(df),
+            "session_profiles": group_sessions(df),
+            "execution_artifacts": detect_execution_artifacts(df),
+            "yara_detections": yara_hits or [],
         }
 
         # ==========================================
@@ -1409,13 +1896,13 @@ def generate_export_payloads(df: pl.DataFrame) -> dict:
             "Anomalous_Processes_Table": context_json["system_noise_summary"],
             "Sigma_Hits_Table": sigma_hits
         }
-        
+
         import json
         return {
             "context_json": json.dumps(context_json, indent=4),
             "html_data": html_tables
         }
-        
+
     except Exception as e:
         import traceback
         trace_str = traceback.format_exc()

@@ -4,12 +4,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chronos-DFIR [v176]</title>
-    <script>console.log("%c CHRONOS-DFIR v176 LOADING...", "color: #00e676; font-size: 16px; font-weight: bold;");</script>
+    <title>Chronos-DFIR [v185]</title>
+    <script>console.log("%c CHRONOS-DFIR v185 LOADING...", "color: #00e676; font-size: 16px; font-weight: bold;");</script>
     <!-- Tabulator CSS -->
     <link href="https://unpkg.com/tabulator-tables@6.3.0/dist/css/tabulator_midnight.min.css" rel="stylesheet">
     <!-- Main Style -->
-    <link rel="stylesheet" href="/static/chronos_v110.css?v=179">
+    <link rel="stylesheet" href="/static/chronos_v110.css?v={{ v }}">
     <script type="text/javascript" src="https://oss.sheetjs.com/sheetjs/xlsx.full.min.js"></script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/themes/dark.css">
@@ -28,7 +28,7 @@
     <div class="container">
         <header>
             <h1>Chronos-DFIR <span class="version-badge">BETA 1.1</span> <span class="version-badge"
-                    style="background:var(--accent-primary); color:white;">v176</span></h1>
+                    style="background:var(--accent-primary); color:white;">v185</span></h1>
             <p>Advanced Forensic Artifact Timeline Explorer</p>
         </header>
 
@@ -68,29 +68,14 @@
 
             <div class="divider-vertical"></div>
 
-            <!-- Consolidated Export Menu -->
-            <div class="dropdown">
-                <button class="btn-secondary dropdown-toggle">Export <i class="fas fa-download"></i></button>
-                <div class="dropdown-content">
-                    <button id="download-csv" class="dropdown-item">CSV Format</button>
-                    <button id="download-xlsx" class="dropdown-item">Excel Spreadsheet</button>
-                    <button id="download-json" class="dropdown-item">JSON Structure</button>
-                    <hr>
-                    <div class="item-with-options">
-                        <button id="download-split" class="dropdown-item">Zip (Split Artifacts)</button>
-                        <select id="zip-chunk-size" class="chunk-select">
-                            <option value="99">99MB</option>
-                            <option value="50">50MB</option>
-                        </select>
-                        <select id="zip-format" class="chunk-select" title="Output format">
-                            <option value="csv">CSV</option>
-                            <option value="json">JSON</option>
-                        </select>
-                    </div>
-                    <hr>
-                    <button id="download-ai" class="dropdown-item btn-ai">Context</button>
-                    <button id="download-report" class="dropdown-item btn-primary">Graphical Report 📄</button>
-                </div>
+            <!-- Export Buttons (Direct — no dropdown) -->
+            <div class="control-group" style="padding: 2px 6px; gap: 4px;">
+                <span class="control-group-label">Export</span>
+                <button id="download-csv" class="btn-secondary btn-sm">CSV</button>
+                <button id="download-xlsx" class="btn-secondary btn-sm">Excel</button>
+                <button id="download-json" class="btn-secondary btn-sm">JSON</button>
+                <button id="download-ai" class="btn-sm" style="background:#8b5cf6; color:white; border:none;">Context</button>
+                <button id="download-report" class="btn-sm" style="background:var(--accent-primary); color:white; border:none;">Report</button>
             </div>
 
             <div class="divider-vertical"></div>
@@ -135,8 +120,7 @@
         </div>
 
         <!-- Forensic Dash (Quick Insights) -->
-        <div id="forensic-dash" class="forensic-dash hidden"
-            style="display: flex; gap: 10px; margin-bottom: 10px; flex-wrap: wrap;">
+        <div id="forensic-dash" class="forensic-dash hidden">
             <div class="dash-card">
                 <span class="dash-label">Top Tactic</span>
                 <span id="dash-tactic" class="dash-value">N/A</span>
@@ -154,6 +138,8 @@
                 <span id="dash-eps" class="dash-value">0</span>
             </div>
         </div>
+        <!-- TTP Summary Strip (populated dynamically by renderForensicReport) -->
+        <div id="ttp-summary-strip" class="ttp-strip hidden"></div>
 
         <!-- Info Bar (Time Range & Count) -->
         <div class="output-controls"
@@ -216,7 +202,7 @@
     <!-- Scripts -->
     <script type="text/javascript" src="https://unpkg.com/tabulator-tables@6.3.0/dist/js/tabulator.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
-    <script type="module" src="/static/js/main.js?v=179"></script>
+    <script type="module" src="/static/js/main.js?v={{ v }}"></script>
 
     <!-- Forensic Summary Modal -->
     <div id="summary-modal" class="modal hidden">
@@ -234,8 +220,11 @@
                     <button class="btn-primary dropdown-toggle" id="modal-export-toggle" aria-expanded="false" style="display:flex; align-items:center; gap:6px;">
                         <i class="fas fa-download"></i> Export Report <i class="fas fa-caret-down" style="font-size:0.75rem;"></i>
                     </button>
-                    <div class="dropdown-content" id="modal-export-menu" style="bottom:110%; top:auto; min-width:180px;">
-                        <a href="#" id="modal-dl-json" style="display:flex; align-items:center; gap:8px;"><i class="fas fa-code" style="width:14px;"></i> JSON (data)</a>
+                    <div class="dropdown-content" id="modal-export-menu" style="bottom:110%; top:auto; min-width:200px;">
+                        <a href="#" id="modal-dl-csv" style="display:flex; align-items:center; gap:8px;"><i class="fas fa-file-csv" style="width:14px;"></i> CSV (full data)</a>
+                        <a href="#" id="modal-dl-xlsx" style="display:flex; align-items:center; gap:8px;"><i class="fas fa-file-excel" style="width:14px;"></i> Excel (full data)</a>
+                        <hr style="border-color:rgba(255,255,255,0.1); margin:4px 0;">
+                        <a href="#" id="modal-dl-json" style="display:flex; align-items:center; gap:8px;"><i class="fas fa-code" style="width:14px;"></i> JSON (forensic)</a>
                         <a href="#" id="modal-dl-html" style="display:flex; align-items:center; gap:8px;"><i class="fas fa-file-code" style="width:14px;"></i> HTML Report</a>
                         <a href="#" id="modal-dl-pdf"  style="display:flex; align-items:center; gap:8px;"><i class="fas fa-file-pdf" style="width:14px;"></i> PDF (print)</a>
                     </div>

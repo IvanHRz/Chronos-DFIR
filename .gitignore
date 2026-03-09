@@ -13,6 +13,24 @@ chronos_uploads/
 chronos_output/
 Skills_pdf/
 
+# Local databases
+/chronos_cases.duckdb
+
+# Environment secrets
+.env
+
+# Agent / AI tool directories
+.agent/
+.agents/
+
+# Internal / non-distributable scripts
+/cyber_architect.py
+/app_logic.py
+/chronos_dfir.py
+/GEMINI_CLI_CHANNEL.md
+/antigravity_skills_schema.md
+/install_*.sh
+
 # Debug/scratch scripts (root level only)
 /debug_*.py
 /check_*.py
@@ -22,7 +40,14 @@ Skills_pdf/
 /read_log.py
 /monitor_logs.py
 /test_*.py
+/test.csv
 /test_*.csv
 /test_*.xlsx
+/test_forensic.*
 /server2.log
 /start_monitoring.sh
+
+# Scratch test files (keep only formal test suite in tests/)
+tests/test_data_api.py
+tests/test_fastapi_export*.py
+tests/test_json_ingestor.py

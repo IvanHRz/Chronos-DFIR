@@ -1,6 +1,6 @@
-import { API } from './api.js?v=179';
-import ChronosState from './state.js?v=179';
-import events from './events.js?v=179';
+import { API } from './api.js?v=185';
+import ChronosState from './state.js?v=185';
+import events from './events.js?v=185';
 
 export class GridManager {
     constructor(elementId) {
@@ -10,6 +10,8 @@ export class GridManager {
         this.columnManagerActive = false;
         this.selectedColumns = [];
         this.columnsWithHits = new Set();
+        this._persistentSelectedIds = new Set(); // Persists across AJAX pages
+        this._isReloading = false; // Guard: prevent rowDeselected from clearing during reload
         this.setupEventListeners();
     }
 
@@ -47,17 +49,35 @@ export class GridManager {
             if (this.table) {
                 this.table.clearData();
                 this.isSelectionView = false;
+                this._persistentSelectedIds.clear();
             }
         });
     }
 
     reload() {
         if (!this.table || !ChronosState.currentFilename) return;
+        this._isReloading = true;
         this.table.setData(`/api/data/${ChronosState.currentFilename}`, {
             query: ChronosState.currentQuery,
             start_time: ChronosState.startTime,
             end_time: ChronosState.endTime,
             col_filters: JSON.stringify(ChronosState.currentColumnFilters)
+        }).then(() => {
+            this._isReloading = false;
+            this._resyncSelectionUI();
+        }).catch(() => {
+            this._isReloading = false;
+        });
+    }
+
+    /** Re-select rows that are in _persistentSelectedIds after a grid reload */
+    _resyncSelectionUI() {
+        if (this._persistentSelectedIds.size === 0) return;
+        this.table.getRows().forEach(row => {
+            const id = row.getData()?._id;
+            if (id != null && this._persistentSelectedIds.has(id)) {
+                row.select();
+            }
         });
     }
 
@@ -139,9 +159,19 @@ export class GridManager {
             }
         });
 
-        // Row Selection Updates state
-        this.table.on("rowSelectionChanged", (data, rows) => {
-            ChronosState.selectedIds = data.map(r => r._id);
+        // Row Selection — persistent across AJAX pages
+        this.table.on("rowSelected", (row) => {
+            const id = row.getData()._id;
+            if (id != null) this._persistentSelectedIds.add(id);
+            ChronosState.selectedIds = Array.from(this._persistentSelectedIds);
+            events.emit('SELECTION_CHANGED');
+        });
+        this.table.on("rowDeselected", (row) => {
+            if (this._isReloading) return; // Don't clear persistent IDs during grid reload
+            const id = row.getData()._id;
+            if (id != null) this._persistentSelectedIds.delete(id);
+            ChronosState.selectedIds = Array.from(this._persistentSelectedIds);
+            events.emit('SELECTION_CHANGED');
         });
 
         // Sync header filters → ChronosState via updateFilters (emits FILTERS_CHANGED).
@@ -275,35 +305,53 @@ export class GridManager {
 
     getSelectedIds() {
         if (!this.table) return [];
+        // When in selection view, use ChronosState (populated before deselectRow cleared visuals)
         if (this.isSelectionView) {
+            if (ChronosState.selectedIds && ChronosState.selectedIds.length > 0) {
+                return ChronosState.selectedIds;
+            }
             return this.table.getData().map(r => r._id);
         }
-        return this.table.getSelectedRows().map(r => r.getData()._id);
+        // Use persistent set (survives AJAX page changes)
+        if (this._persistentSelectedIds.size > 0) {
+            return Array.from(this._persistentSelectedIds);
+        }
+        return [];
     }
 
     applyRowSelectionFilter(filename, onUpdateChart) {
         if (!this.table) return;
 
         if (!this.isSelectionView) {
-            const selectedRows = this.table.getSelectedRows();
-            if (selectedRows.length === 0) {
+            // Use persistent set (includes selections from all pages)
+            const selectedIndices = this._persistentSelectedIds.size > 0
+                ? Array.from(this._persistentSelectedIds)
+                : this.table.getSelectedRows().map(r => r.getData()._id || 0);
+
+            if (selectedIndices.length === 0) {
                 alert("No rows selected. Please check the boxes on the left to filter.");
                 return false;
             }
 
-            const selectedIndices = selectedRows.map(r => r.getData()._id || 0);
             const idSet = new Set(selectedIndices);
 
             this.isSelectionView = true;
             this.table.setFilter(data => idSet.has(data._id));
-            // Deselect all rows after filtering — the filter IS the selection now
+            // Guard: prevent deselectRow from clearing persistent IDs via rowDeselected callback
+            this._isReloading = true;
             this.table.deselectRow();
+            this._isReloading = false;
+            // Restore selectedIds (deselectRow callbacks would have emptied them without the guard)
+            ChronosState.selectedIds = Array.from(idSet);
 
             if (onUpdateChart) onUpdateChart(filename, selectedIndices);
             return true;
         } else {
             this.isSelectionView = false;
+            this._persistentSelectedIds.clear();
+            ChronosState.selectedIds = [];
             this.table.clearFilter();
+            this.reload(); // Reload full dataset from server
             return false;
         }
     }
@@ -332,7 +380,8 @@ export class GridManager {
                 query: window.ChronosState?.currentQuery || '',
                 start_time: window.ChronosState?.startTime || '',
                 end_time: window.ChronosState?.endTime || '',
-                col_filters: JSON.stringify(window.ChronosState?.currentColumnFilters || this.table.getHeaderFilters() || [])
+                col_filters: JSON.stringify(window.ChronosState?.currentColumnFilters || this.table.getHeaderFilters() || []),
+                selected_ids: JSON.stringify(window.ChronosState?.selectedIds || [])
             };
             const data = await API.getEmptyColumns(filename, params);
             const emptySet = new Set((data.empty_columns || []).map(c => c.toLowerCase()));
@@ -378,7 +427,10 @@ export class GridManager {
         cols.forEach(col => { if (!col.isVisible()) col.show(); });
 
         this.isSelectionView = false;
+        this._persistentSelectedIds.clear();
+        ChronosState.selectedIds = [];
         this.table.restoreRedraw();
+        this.reload(); // Reload full dataset from server after clearing all filters
     }
 
     // ─────────────────────────────────────────────────────────────

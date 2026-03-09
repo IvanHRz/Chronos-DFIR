@@ -398,6 +398,20 @@ def _evaluate_temporal_correlation(
 
 
 # ---------------------------------------------------------------------------
+# Forensic context columns — always include in evidence if present in data
+# ---------------------------------------------------------------------------
+FORENSIC_CONTEXT_COLUMNS = [
+    "UserName", "User", "AccountName", "SubjectUserName", "TargetUserName",
+    "EventDataTargetUserName", "EventDataSubjectUserName",
+    "ProcessName", "Image", "NewProcessName", "ParentImage", "ParentProcessName",
+    "SourceIP", "IpAddress", "SourceAddress", "ClientIP", "EndpointIp",
+    "CommandLine", "ParentCommandLine",
+    "Status", "Result", "LogonType",
+    "DestinationHostname", "DestinationIp", "DestPort",
+    "ServiceName", "TaskName", "ObjectName",
+]
+
+# ---------------------------------------------------------------------------
 # Main evaluation entry point
 # ---------------------------------------------------------------------------
 
@@ -428,6 +442,9 @@ def match_sigma_rules(df: pl.DataFrame, rules: Optional[list] = None) -> list[di
         if not condition_str:
             continue
 
+        # Collect field names referenced in detection blocks for evidence columns
+        detection_fields: set[str] = set()
+
         # Build named expression blocks (skip meta keys)
         named_exprs: dict[str, Optional[pl.Expr]] = {}
         _meta_keys = {"condition", "timeframe", "correlation"}
@@ -436,11 +453,19 @@ def match_sigma_rules(df: pl.DataFrame, rules: Optional[list] = None) -> list[di
                 continue
             if isinstance(block_value, dict):
                 named_exprs[block_name] = _build_named_condition(block_value, columns)
+                # Track which fields this block references
+                for field_raw in block_value.keys():
+                    base_field = field_raw.split("|")[0]
+                    detection_fields.add(base_field)
             elif isinstance(block_value, list):
                 # List of dicts — OR them
                 sub = [_build_named_condition(b, columns) for b in block_value if isinstance(b, dict)]
                 sub = [e for e in sub if e is not None]
                 named_exprs[block_name] = functools.reduce(operator.or_, sub) if sub else None
+                for b in block_value:
+                    if isinstance(b, dict):
+                        for field_raw in b.keys():
+                            detection_fields.add(field_raw.split("|")[0])
             else:
                 named_exprs[block_name] = None
 
@@ -467,6 +492,52 @@ def match_sigma_rules(df: pl.DataFrame, rules: Optional[list] = None) -> list[di
             if match_count == 0:
                 continue
 
+        # --- Extract evidence: resolve detection_fields to actual column names ---
+        matched_columns = []
+        for df_name in detection_fields:
+            # Case-insensitive match + dot-notation fallback
+            for c in columns:
+                if c.lower() == df_name.lower() or c.lower() == df_name.rsplit(".", 1)[-1].lower():
+                    if c not in matched_columns and c != "_id":
+                        matched_columns.append(c)
+                    break
+
+        # Build sample evidence: first 150 rows with _id + detection columns
+        sample_evidence = []
+        all_row_ids = []
+        try:
+            # Select _id + matched columns (+ time column if available)
+            evidence_cols = []
+            if "_id" in df_matched.columns:
+                evidence_cols.append("_id")
+                all_row_ids = df_matched["_id"].to_list()[:500]
+            # Add time column first for context
+            time_col = _find_time_column(df_matched.columns)
+            if time_col and time_col not in matched_columns:
+                evidence_cols.append(time_col)
+            evidence_cols.extend(matched_columns)
+            # Add forensic context columns that exist in data (max 12 total cols)
+            for fc in FORENSIC_CONTEXT_COLUMNS:
+                if len(evidence_cols) >= 12:
+                    break
+                # Case-insensitive match against actual columns
+                for c in df_matched.columns:
+                    if c.lower() == fc.lower() and c not in evidence_cols:
+                        evidence_cols.append(c)
+                        break
+            # Deduplicate while preserving order
+            seen = set()
+            deduped = []
+            for c in evidence_cols:
+                if c not in seen and c in df_matched.columns:
+                    seen.add(c)
+                    deduped.append(c)
+            if deduped:
+                sample_df = df_matched.head(150).select(deduped)
+                sample_evidence = sample_df.to_dicts()
+        except Exception as exc:
+            logger.debug(f"Sigma evidence extraction for '{rule.get('title', '?')}': {exc}")
+
         custom = rule.get("custom", {}) or {}
         raw_tags = rule.get("tags", []) or []
         # Normalize tags: ensure consistent "attack.tXXXX" format
@@ -489,6 +560,9 @@ def match_sigma_rules(df: pl.DataFrame, rules: Optional[list] = None) -> list[di
             )),
             "tags": tags,
             "matched_rows": match_count,
+            "matched_columns": matched_columns,
+            "sample_evidence": sample_evidence,
+            "all_row_ids": all_row_ids,
             "rule_path": os.path.relpath(rule["_path"], _get_rules_dir()) if rule.get("_path") else "inline",
         })
 

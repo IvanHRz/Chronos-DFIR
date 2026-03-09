@@ -1,14 +1,11 @@
 # Chronos-DFIR Web
 
-> Versión: BETA 1.1 (v168)
+> Versión: BETA 1.1 (v185)
 > Descripción: Explorador Avanzado de Líneas de Tiempo e Investigaciones Forenses
 
 ## Resumen de la Aplicación
 
 Chronos-DFIR Web es una herramienta integral diseñada para analistas forenses y equipos de Respuesta a Incidentes (DFIR). Su objetivo principal es facilitar la ingesta, normalización, enriquecimiento y visualización interactiva de grandes volúmenes de eventos (logs) provenientes de múltiples fuentes. Chronos-DFIR construye una línea de tiempo unificada (Timeline) para la reconstrucción cronológica precisa de incidentes cibernéticos.
-
-**Ubicación del Proyecto:** `/Users/ivanhuerta/Documents/chronos_antigravity`
-**Directorio de Pruebas (Artefactos):** `/Users/ivanhuerta/Documents/Artefactos_pruebas`
 
 ---
 
@@ -22,7 +19,7 @@ La aplicación soporta la carga mediante "Drag & Drop", aceptando una gran varie
   - **EVTX (Windows Event Logs):** Procesamiento optimizado de logs de Windows, extrayendo automáticamente atributos clave (EventID, Level, Provider, Computer, descripciones).
   - **MFT (Master File Table):** Parseo y soporte para el análisis profundo de sistemas de archivos NTFS.
   - **PLIST (Property List - macOS):** Detección y parseo automático de archivos PLIST de macOS (como LaunchAgents y LaunchDaemons) usados frecuentemente en mecanismos de persistencia. Extrae rutas, binarios ejecutados y firmas.
-  
+
 - **Formatos Genéricos, de Texto y Reporte:**
   - **TXT (Unified Logs & Texto Plano):** Nuevo motor de parseo regex para extraer logs estructurados (ej. logs unificados de macOS) generados en texto plano, parseando y normalizando información relevante de cada evento en columnas limpias.
   - **CSV / TSV / Excel (.xlsx):** Ingesta de reportes exportados por herramientas como Plaso, Kape, EDRs y automacTC.
@@ -58,7 +55,7 @@ Chronos-DFIR utiliza un diseño optimizado (Professional Dark Mode enfocado en e
 
 ### 3. Filtros y Búsqueda del Timeline/Grid
 
-Su lógica de co-dependencia es central. Modificar un vector temporal en el header muta inmediatamente el Grid, y viceversa. 
+Su lógica de co-dependencia es central. Modificar un vector temporal en el header muta inmediatamente el Grid, y viceversa.
 
 - **Global Search:** Caja de tipeo rápida (debounce). Busca sub-cadenas exactas iterando a través de millones de celdas en memoria de Tabulator (vDOM). **Lógica visual:** Al dar 'enter' recorta las filas no coincidentes y "resalta" el query textual hallado en un fondo amarillo tipo "Highlight".
 - **Controles de Tiempo (Start / End + Filter):** La lógica inyecta límites estrictos desde el timestamp nativo más temprano y tardío alojados en memoria del dataset ingerido. Recorta quirúrgicamente los eventos al invocar "Filter".
@@ -80,7 +77,7 @@ El Gráfico (construido con Chart.js) se redibuja en sincronía con cualquier ca
   - **Categorización Rápida Táctica:** Rojo puro advierte reglas YARA/SIGMA mapeadas en esa hora, o códigos críticos definidos en Syslogs (Alta Prioridad visual). Las columnas de colores frios marcan latido de red o eventos pasivos del O.S. (Baja prioridad).
   - **Media de Tendencia & Pico de Riesgo (Anomalías Computadas):** En lugar de sólo barras normales, el backend inyecta una visualización (línea media punteada dorada). Cuando el motor en Pythón nota 2 a 3 desviaciones estándar por arriba del promedio general (spikes estadistícos masivos), marca ese "Bucket" y alerta verbalmente: "Tendencia: Posible Ataque/Spike".
 
-- **Exportación de Arte:** 
+- **Exportación de Arte:**
   - **📷 PNG:** Captura un dump en canvas HD para pegarse en PowerPoint / Word ejecutivos al instante (Proof of Concept).
   - **� Excel:** Agrupa la base de coordenadas (Eje X Tiempo / Eje Y Conteo) a una tabla cruda descargable en XLSX. Excelente para alimentar herramientas OSINT adicionales o dashboards PowerBI.
   - **Log Scale (Checkbox):** Aplica Log Base 10 (`Math.log10(y)`) reactivo en frontend al instante, permitiendo contrastar un bar-histogram de 1 impacto anómalo a lado de otro de 55,000 conexiones sin que una abrume estáticamente a la otra.
@@ -94,6 +91,60 @@ Existen lógicamente columnas intocables "Freeze/Pin" que dictaminan el rastreo 
 - **Timestamp:** Formateado al unísono con el Timeline gráfico, rige orden temporal absoluto principal, nunca puede des-mostrarse.
 - **No.:** Un id de interfaz (No es id forense). Lógica relacional de conteo directo de render visible. (1 a N logs mostrados activos pos-filtro. Ayuda de guía para saber dónde ibamos leyendo).
 - **Tag:** Checkbox de control para alimentar las matrices lógicas como "Row filtering". Nunca oculta.
+
+---
+
+## Arquitectura de Skills y Motor de Detección
+
+Chronos-DFIR cuenta con **76 skills** organizadas en un registro central (`engine/skill_router.py`) que clasifica cada una según su nivel de integración:
+
+| Estado | Cantidad | Descripción |
+|--------|----------|-------------|
+| **active** | 10 | Código en producción en `engine/` o `app.py` |
+| **frontend** | 5 | Implementadas en `static/js/` |
+| **rules** | 5 | Implementadas via reglas Sigma YAML o YARA |
+| **wired** | 4 | Código `.py` existe pero no está conectado a endpoints |
+| **prompt_only** | 52 | System prompts de consulta para agentes IA |
+
+### Motor de Detección
+- **Sigma Engine** (`engine/sigma_engine.py`): Compilador dinámico YAML→Polars. Carga reglas de `rules/sigma/` y las evalúa en runtime. Soporta condiciones AND/OR, modificadores `contains`/`startswith`/`endswith`, y correlación temporal.
+- **Reglas Sigma**: 86+ reglas cubriendo MITRE ATT&CK (TA0001-TA0011, TA0040) + OWASP Top 10.
+- **Reglas YARA**: 7 archivos cubriendo ransomware, LOLBins, C2 frameworks, infostealers, webshells, macOS persistence.
+- **Detección offline 100%**: Todas las reglas son archivos locales.
+
+### Módulos del Engine
+| Módulo | Líneas | Propósito |
+|--------|--------|-----------|
+| `engine/forensic.py` | ~1,426 | Análisis forense, sub-analizadores, risk engine |
+| `engine/sigma_engine.py` | ~500 | Motor Sigma YAML→Polars |
+| `engine/ingestor.py` | ~370 | Ingesta multi-formato (CSV, XLSX, JSON, SQLite, Plist, etc.) |
+| `engine/analyzer.py` | ~251 | Histogramas, bucketing temporal, distribuciones |
+| `engine/skill_router.py` | ~300 | Registro central de 76 skills con estado de integración |
+
+---
+
+## Flujo de Trabajo Multi-Agente
+
+Chronos se desarrolla con un protocolo de 3 agentes IA:
+
+| Agente | Rol | Herramienta |
+|--------|-----|-------------|
+| **Claude** | Arquitecto — diseño, implementación, reglas | Claude Code CLI |
+| **Gemini CLI** | Ingeniero — QA, profiling, dependencias | Gemini CLI |
+| **Antigravity** | Auditor — counter-audits, verificación empírica | Antigravity |
+
+### Documentos de Coordinación (`.agents/`)
+- `STATUS.md` — Estado actual (~30 líneas, scores por área)
+- `MANDATES.md` — Checklist de pendientes priorizados
+- `SCORECARD.md` — Historial de scores por versión
+- `DECISION_LOG.md` — Architecture Decision Records (ADRs)
+- `RUNBOOK_TEMPLATE.md` — Template para sesiones multi-agente
+- `audits/` — Auditorías archivadas por fecha
+
+### CI/CD y Verificación Automática
+- **Pre-commit hook**: Verifica app.py < 2000 líneas, 0 pandas, tests passing
+- **GitHub Actions** (`.github/workflows/ci.yml`): Tests automatizados, constraints de código, validación Sigma
+- **Cachebust automático**: Hash MD5 de assets JS/CSS inyectado via Jinja2 (`{{ v }}`)
 
 ---
 
@@ -158,3 +209,119 @@ Existen lógicamente columnas intocables "Freeze/Pin" que dictaminan el rastreo 
 ### Visualizaciones Sin Timestamp
 - Cuando no hay columna temporal detectada, el HTML report reemplaza el histograma por mini-charts horizontales de **Top Users**, **Top Processes**, **Top Paths** (Chart.js bar charts).
 - Funcionalidad tipo GoAccess/ELK para artefactos forenses sin timestamps.
+
+---
+
+## Bitácora v181 — Fix Definitivo de Exports y Dashboard
+
+### Cache Bust System
+- Imports JS usan `?v=185` en `main.js` — SIEMPRE incrementar al cambiar cualquier módulo JS
+- `ASSET_VERSION` (MD5 hash) solo bust-ea `main.js` entry point; los módulos internos necesitan version manual
+
+### XLSX Export — Integridad Forense
+- `xlsxwriter` con `write_string()` para TODAS las celdas (no solo hex) — previene toda auto-conversión de Excel
+- `strings_to_numbers: False` + `num_format: '@'` para columnas hex/hash/GUID
+- Polars `infer_schema_length=0` en todas las rutas de lectura CSV — todo como Utf8
+
+### Context Export Completo (CSV + XLSX)
+- `_buildForensicSummaryRows()` ahora exporta TODAS las secciones del modal:
+  - Header metadata, Timeline Analysis, Sanitized Forensic Summary (IPs, Users, Hosts, Paths, Methods, Violations, Event IDs, Tactics), Chronos Hunter Summary (suspicious patterns, network, logons), Identity & Assets (processes, rare processes, rare paths), Sigma Detections (con sample evidence rows), YARA, MITRE Kill Chain, Cross-Source Correlation, Session Profiles, Risk Justification
+- Nuevo endpoint `/api/export/forensic-summary` genera XLSX formateado con xlsxwriter (secciones coloreadas, headers, formato de texto forzado)
+- Botón Excel del modal ahora descarga XLSX real (no CSV)
+
+### TTP Summary Strip
+- Nuevo elemento `#ttp-summary-strip` debajo del dashboard con badges de severity (CRITICAL: N, HIGH: N) + pills de MITRE techniques (T1003, T1059, etc.)
+- Se actualiza dinámicamente con cada refresh del dashboard (filtros, time range)
+- Proporciona feedback visual inmediato de que los TTPs cambiaron al filtrar
+
+### Row Selection Persistente
+- `_persistentSelectedIds` Set en `grid.js` — sobrevive paginación AJAX
+- `getSelectedIds()` retorna del Set persistente
+- Backend `_apply_standard_processing` filtra por `_id` con logging (`[SELECTED_IDS]`)
+
+### HTML Report Enhancements
+- Sigma evidence tables expandibles (`<details>`) en el reporte HTML
+- Print CSS comprehensivo: 30+ reglas para forzar colores legibles en todo contenido dinámico JS
+- `<details>` se auto-expanden en print mode
+
+### Skills de Testing
+- **`chronos_export_testing`**: 10 tests exhaustivos para CSV, XLSX, JSON, Context CSV, Context XLSX, HTML Report
+- **`chronos_filter_diagnostics`**: actualizado con síntomas de TTPs y cache bust
+
+---
+
+## Bitácora v185 — Row Filter Export Fix, Chart Consistency, Hex Protection
+
+### Row Selection Export Fix (Bug Crítico)
+- **Problema:** Al clickear "Row Filter", `table.deselectRow()` disparaba el callback `rowDeselected` por cada fila, vaciando `_persistentSelectedIds` y `ChronosState.selectedIds` antes de que export/dashboard pudieran leerlos. Resultado: exports CSV/XLSX ignoraban la selección de filas y exportaban TODO.
+- **Solución:** Guard con `_isReloading = true` antes de `deselectRow()` en `applyRowSelectionFilter()`. Restaura `ChronosState.selectedIds` desde `idSet` después. `getSelectedIds()` ahora prioriza `ChronosState.selectedIds` cuando está en selection view.
+- **Archivos:** `static/js/grid.js`, `static/js/actions.js`, `static/js/main.js`
+
+### Chart Scale Consistente
+- **Problema:** `autoLog` automático (pico/media > 4x) causaba que la misma data se mostrara a veces en log scale y a veces en linear.
+- **Solución:** Escala siempre linear por defecto. Log scale solo se activa con el checkbox manual. Barra de interpretación sugiere "💡 considera activar Log Scale" cuando el pico lo amerita.
+- **Archivo:** `static/js/charts.js`
+
+### CSV Hex Preservation
+- **Problema:** Valores hex (`0x00000030`) en CSV se auto-convertían a decimal al abrir en Excel/Numbers.
+- **Solución:** Columnas hex-prone se envuelven en formula `="0x..."` que Excel interpreta como texto. BOM UTF-8 + `quote_style="always"` se mantienen.
+- **Archivo:** `app.py`
+
+### PDF/Report Tabla Colores Unificados
+- **Problema:** Tablas en el reporte HTML/PDF tenían fondos inconsistentes (gris vs gris-azul).
+- **Solución:** Unificación: headers `#f1f5f9`, celdas `#ffffff`, even rows `#f8fafc`. Aplica a `.context-table` y tablas JS-generated (sigma, hunting, context).
+- **Archivo:** `templates/static_report.html`
+
+### Debounce SELECTION_CHANGED (Charts)
+- **Problema:** Seleccionar múltiples filas disparaba N requests de histogram (uno por fila) saturando el servidor.
+- **Solución:** Debounce 400ms en el listener de `SELECTION_CHANGED` en charts.
+- **Archivo:** `static/js/charts.js`
+
+### Export Prioriza ChronosState.selectedIds
+- `_exportFiltered()` ahora lee primero de `ChronosState.selectedIds` (source of truth) y solo usa `getSelectedIds()` como fallback.
+- **Archivo:** `static/js/actions.js`
+
+---
+
+## Bitácora v180.7 — Estabilización Fase 1 Completa
+
+### Sigma Evidence Enrichment (Etapa 1)
+- **Sigma Engine** ahora retorna `sample_evidence` (primeras 150 filas con columnas de detección + contexto forense), `matched_columns`, y `all_row_ids` (500 IDs para "View in Grid").
+- **YARA** integrado como tarea paralela en el análisis forense (9 tasks en `asyncio.gather`). Resultados incluidos en el modal y en Context Export.
+- **Correlation chains** incluyen `row_ids` por entidad correlacionada.
+- **Modal forense expandible**: cada detección Sigma es clickeable, muestra tabla de evidencia con columnas forenses relevantes (User, Process, IP, CommandLine, etc.) y botón "View all in Grid" que filtra el grid principal.
+- **`FORENSIC_CONTEXT_COLUMNS`**: 27 columnas forenses clave se agregan automáticamente a la evidencia Sigma si existen en los datos (máximo 12 columnas totales por tabla).
+
+### Estabilización de Exports y Filtros (8 bugs corregidos)
+1. **Selección persistente de filas**: Las selecciones con checkbox ahora persisten entre páginas AJAX del grid. Los exports CSV/Excel respetan la selección exacta.
+2. **Dashboard actualiza con filtros**: TTPs y risk score se recalculan automáticamente al cambiar filtros (global search, tiempo, columnas) con debounce de 1200ms.
+3. **Integridad hex en exports**: CSV incluye BOM UTF-8 para que Excel preserve `0x00000030`. XLSX usa `xlsxwriter` con formato texto explícito (`num_format='@'`) en columnas hex/hash/guid.
+4. **Charts sin parpadeo**: Animaciones reducidas a 300ms para transiciones suaves al cambiar filtros.
+5. **Context modal CSV/Excel**: Ahora exportan un resumen forense estructurado (Sigma hits, YARA, correlación, risk) en vez de datos raw.
+6. **PDF legible**: Colores de `.snippet-box`, risk badges y tactic badges corregidos para impresión. Leyenda de colores del histograma (Peak/Above mean/Normal/Average) agregada.
+7. **Composición de filtros**: Global search + time filter + column headers + row selection funcionan juntos en exports.
+
+---
+
+## Roadmap de Desarrollo — Fases
+
+| Fase | Nombre | Estado | Descripción |
+|------|--------|--------|-------------|
+| **Etapa 0** | Estabilización Exports/Filtros | COMPLETADA | 5 bugs de exports, col_filters estandarizado, selected_ids en HTML/PDF, empty columns |
+| **Etapa 1** | Enriquecimiento TTP con Contexto | COMPLETADA | Sigma evidence (150 filas + columnas forenses), YARA en forensic_report, correlation row_ids, modal expandible, context export enriquecido |
+| **Etapa 1.5** | Estabilización v2 (Testing Real) | COMPLETADA | 8 bugs: hex preservation, persistent selection, dashboard refresh, chart animation, context modal export, PDF print CSS |
+| **Etapa 2** | Plataforma de Casos (DuckDB) | PENDIENTE | `engine/case_db.py` + `engine/case_router.py` ya existen. CRUD de casos, fases, archivos, journal. Falta: `pip install duckdb`, tests, verificación |
+| **Etapa 3** | Frontend Sidebar + Journal UI | PENDIENTE | Sidebar de navegación de casos, UI de journal/notas, timeline por caso |
+| **Etapa 4** | Multi-File + Cross-Correlation | PENDIENTE | Cargar múltiples archivos en un caso, correlación cross-file, timeline unificada multi-fuente |
+| **Etapa 5** | MCP Server + AI Chat | PENDIENTE | Model Context Protocol server para integración con LLMs, chat assistant contextual |
+| **Etapa 6** | Auto-Narrativa + Export .chronos-case | PENDIENTE | Generación automática de narrativa forense, export de caso completo como bundle portable |
+
+### Principios Arquitectónicos
+- Cada etapa es independiente y verificable
+- Sin caso abierto = interfaz idéntica a la actual (backward compatible)
+- Offline-first: cero dependencias externas en Etapas 0-4
+- Cross-platform: Windows/Mac/Linux sin cambios
+- `app.py` se mantiene bajo 2000 líneas (routers externos para features nuevas)
+
+### Próximo Paso
+Etapa 2 requiere: `pip install duckdb`, verificar CRUD endpoints existentes, tests de integración.

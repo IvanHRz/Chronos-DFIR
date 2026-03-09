@@ -1,10 +1,10 @@
-console.log("CHRONOS-CORE: Loading v179...");
-import { API } from './api.js?v=179';
-import { GridManager } from './grid.js?v=179';
-import { ChartManager } from './charts.js?v=179';
-import { ActionManager } from './actions.js?v=179';
-import ChronosState from './state.js?v=179';
-import events from './events.js?v=179';
+console.log("CHRONOS-CORE: Loading v185...");
+import { API } from './api.js?v=185';
+import { GridManager } from './grid.js?v=185';
+import { ChartManager } from './charts.js?v=185';
+import { ActionManager } from './actions.js?v=185';
+import ChronosState from './state.js?v=185';
+import events from './events.js?v=185';
 
 // Initialize Managers
 const grid = new GridManager('timeline-table');
@@ -13,6 +13,35 @@ const actions = new ActionManager(grid, charts);
 
 // Expose grid globally for actions to read columns and sorters
 window.grid = grid;
+
+// Global IOC lookup handler for enrichment section clicks
+window._chronosLookupIOC = async (iocValue, iocType) => {
+    try {
+        const result = await API.lookupIOC(iocValue, iocType);
+        console.log(`[ENRICHMENT] Lookup ${iocType}:${iocValue}`, result);
+        alert(`IOC: ${iocValue}\n\n${JSON.stringify(result, null, 2)}`);
+    } catch (e) {
+        console.warn(`[ENRICHMENT] Lookup failed: ${e}`);
+    }
+};
+
+// View Sigma/Correlation detection rows in the main grid
+window._chronosViewSigmaInGrid = (rowIds) => {
+    if (!rowIds || !rowIds.length || !grid.table) return;
+    // Close forensic modal
+    const modal = document.getElementById("summary-modal");
+    if (modal) { modal.classList.remove("show"); modal.classList.add("hidden"); }
+    // Apply client-side filter to show only detection rows
+    const idSet = new Set(rowIds.map(id => typeof id === 'number' ? id : parseInt(id, 10)));
+    grid.isSelectionView = true;
+    grid.table.setFilter(data => idSet.has(data._id));
+    // Update Row Filter button to reflect active state
+    const filterBtn = document.getElementById('filter-selection-btn');
+    if (filterBtn) {
+        filterBtn.innerText = "Show All Events";
+        filterBtn.classList.add("active-filter");
+    }
+};
 
 document.addEventListener('DOMContentLoaded', () => {
     console.log("Chronos-DFIR Modular Engine Initialized with State Management");
@@ -45,6 +74,18 @@ function setupStateObservers() {
         window.addEventListener('popstate', handlePopState);
     });
 
+    // Refresh dashboard cards when filters change (debounced to avoid flooding)
+    let _dashDebounce = null;
+    const debouncedDashRefresh = () => {
+        clearTimeout(_dashDebounce);
+        _dashDebounce = setTimeout(() => {
+            if (ChronosState.currentFilename) actions.loadDashboardCards();
+        }, 500);
+    };
+    events.on('FILTERS_CHANGED', debouncedDashRefresh);
+    events.on('TIME_RANGE_CHANGED', debouncedDashRefresh);
+    events.on('SELECTION_CHANGED', debouncedDashRefresh);
+
     // Global stats update
     events.on('COUNTS_UPDATED', ({ total, filtered }) => {
         const countEl = document.getElementById('record-count');
@@ -76,6 +117,11 @@ function handlePopState() {
     // If cancelled: do nothing — pushState already keeps them here
 }
 
+
+function closeExportMenu() {
+    const menu = document.querySelector('.dropdown-content');
+    if (menu) menu.classList.remove('open');
+}
 
 function setupEventListeners() {
     // ── File Upload ──────────────────────────────────────────────────────────
@@ -154,43 +200,27 @@ function setupEventListeners() {
     // Hard Reset
     document.getElementById('hard-reset-btn')?.addEventListener('click', () => actions.hardReset());
 
-    // ── Export Dropdown: click-based (not hover) ──────────────────────────
-    const exportDropdown = document.querySelector('.dropdown');
-    const exportToggleBtn = exportDropdown?.querySelector('.dropdown-toggle');
-    const exportMenu = exportDropdown?.querySelector('.dropdown-content');
-
-    if (exportToggleBtn && exportMenu) {
-        // Toggle on button click
-        exportToggleBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const isOpen = exportMenu.classList.toggle('open');
-            exportToggleBtn.setAttribute('aria-expanded', isOpen);
-        });
-        // Items inside: stop propagation (don't close on click-through)
-        exportMenu.addEventListener('click', (e) => e.stopPropagation());
-        // Close when clicking outside
-        document.addEventListener('click', () => {
-            exportMenu.classList.remove('open');
-            exportToggleBtn.setAttribute('aria-expanded', 'false');
-        });
-    }
-
-    // Export Buttons
-    document.getElementById('download-csv')?.addEventListener('click', () => exportData('csv'));
-    document.getElementById('download-xlsx')?.addEventListener('click', () => exportData('xlsx'));
-
-    document.getElementById('download-json')?.addEventListener('click', () => exportData('json'));
-
+    // ── Export Buttons (Direct — no dropdown) ──────────────────────────
+    document.getElementById('download-csv')?.addEventListener('click', () => {
+        console.log('[CLICK] CSV export button clicked');
+        if (!ChronosState.currentFilename) { alert("Load a file first."); return; }
+        actions._exportFiltered(ChronosState.currentFilename, 'csv');
+    });
+    document.getElementById('download-xlsx')?.addEventListener('click', () => {
+        console.log('[CLICK] XLSX export button clicked');
+        if (!ChronosState.currentFilename) { alert("Load a file first."); return; }
+        actions._exportFiltered(ChronosState.currentFilename, 'xlsx');
+    });
+    document.getElementById('download-json')?.addEventListener('click', () => {
+        console.log('[CLICK] JSON export button clicked');
+        if (!ChronosState.currentFilename) { alert("Load a file first."); return; }
+        actions._exportFiltered(ChronosState.currentFilename, 'json');
+    });
     document.getElementById('download-ai')?.addEventListener('click', () => {
         actions.showForensicSummary();
     });
-
     document.getElementById('download-report')?.addEventListener('click', () => {
         actions.generateReport();
-    });
-
-    document.getElementById('download-split')?.addEventListener('click', () => {
-        actions.downloadSplitZip();
     });
 
     // Row Selection Filter (Selection View)
@@ -198,7 +228,9 @@ function setupEventListeners() {
         const isNowViewingSelection = grid.applyRowSelectionFilter(ChronosState.currentFilename);
 
         if (isNowViewingSelection) {
-            const ids = grid.getSelectedIds();
+            const ids = ChronosState.selectedIds.length > 0
+                ? ChronosState.selectedIds
+                : grid.getSelectedIds();
             charts.loadHistogramSubset(ChronosState.currentFilename, ids);
         } else {
             // Re-trigger global view
@@ -234,6 +266,14 @@ function setupEventListeners() {
         if (clearBtn) clearBtn.style.display = 'none';
 
         ChronosState.resetFilters();
+        grid.clearFilters();
+
+        // Reset Row Filter button state
+        const selBtn = document.getElementById('filter-selection-btn');
+        if (selBtn) {
+            selBtn.innerText = "Row Filter";
+            selBtn.classList.remove("active-filter");
+        }
     });
 
     // Clear Time Filter
@@ -274,60 +314,84 @@ function setupEventListeners() {
 }
 
 async function exportData(format) {
-    if (!ChronosState.currentFilename) {
-        alert("Please load a file first before exporting.");
-        return;
-    }
-
-    // Always read directly from the grid to guarantee current header filters are included
-    const filters = grid.table ? grid.table.getHeaderFilters() : (ChronosState.currentColumnFilters || []);
-    const selectedIds = grid.getSelectedIds ? grid.getSelectedIds() : [];
-
-    let visibleCols = [];
-    if (grid.table) {
-        visibleCols = grid.table.getColumns()
-            .filter(c => c.isVisible() && c.getField() && c.getField() !== '_id')
-            .map(c => c.getField());
-    }
-
-    const params = {
-        format: format,
-        query: ChronosState.currentQuery || "",
-        start_time: ChronosState.startTime || "",
-        end_time: ChronosState.endTime || "",
-        col_filters: JSON.stringify(filters),
-        selected_ids: selectedIds,
-        visible_columns: visibleCols
-    };
-
-    if (grid.table) {
-        const sorters = grid.table.getSorters();
-        if (sorters.length > 0) {
-            params.sort_col = sorters[0].field;
-            params.sort_dir = sorters[0].dir;
-        }
-    }
-
     try {
+        console.log(`[EXPORT] exportData('${format}') called`);
+
+        if (!ChronosState.currentFilename) {
+            alert("Please load a file first before exporting.");
+            return;
+        }
+
+        console.log(`[EXPORT] Starting ${format} export for ${ChronosState.currentFilename}`);
+
+        // Read filters safely
+        let filters = [];
+        try {
+            filters = grid.table ? grid.table.getHeaderFilters() : [];
+        } catch (e) {
+            console.warn("[EXPORT] getHeaderFilters failed:", e);
+        }
+
+        let selectedIds = [];
+        try {
+            selectedIds = grid.getSelectedIds ? grid.getSelectedIds() : [];
+        } catch (e) {
+            console.warn("[EXPORT] getSelectedIds failed:", e);
+        }
+
+        let visibleCols = [];
+        try {
+            if (grid.table) {
+                visibleCols = grid.table.getColumns()
+                    .filter(c => c.isVisible() && c.getField() && c.getField() !== '_id')
+                    .map(c => c.getField());
+            }
+        } catch (e) {
+            console.warn("[EXPORT] getColumns failed:", e);
+        }
+
+        const params = {
+            format: format,
+            query: ChronosState.currentQuery || "",
+            start_time: ChronosState.startTime || "",
+            end_time: ChronosState.endTime || "",
+            col_filters: JSON.stringify(filters),
+            selected_ids: selectedIds,
+            visible_columns: visibleCols
+        };
+
+        try {
+            if (grid.table) {
+                const sorters = grid.table.getSorters();
+                if (sorters.length > 0) {
+                    params.sort_col = sorters[0].field;
+                    params.sort_dir = sorters[0].dir;
+                }
+            }
+        } catch (e) {
+            console.warn("[EXPORT] getSorters failed:", e);
+        }
+
+        // Close export dropdown
+        closeExportMenu();
+
         window.isDownloading = true;
+        console.log(`[EXPORT] Sending request...`, params);
         const result = await API.exportData(ChronosState.currentFilename, params);
+        console.log(`[EXPORT] Response:`, result);
+
         if (result.download_url) {
-            // Use offscreen anchor for reliable cross-browser download
-            const a = document.createElement('a');
-            a.href = result.download_url;
-            a.download = result.filename || '';
-            a.style.position = 'fixed';
-            a.style.left = '-9999px';
-            document.body.appendChild(a);
-            a.click();
-            setTimeout(() => document.body.removeChild(a), 3000);
+            // Direct location redirect — Content-Disposition: attachment ensures download
+            window.location.href = result.download_url;
+            console.log(`[EXPORT] Download triggered: ${result.download_url}`);
         } else if (result.error || result.detail) {
             alert("Export failed: " + (result.error || result.detail || JSON.stringify(result)));
         } else {
             alert("Export failed: Unexpected response format.");
         }
     } catch (e) {
-        alert("Export network error: " + e.message);
+        console.error("[EXPORT] CRITICAL Error:", e);
+        alert("Export error: " + e.message);
     } finally {
         setTimeout(() => { window.isDownloading = false; }, 4000);
     }

@@ -1,4 +1,4 @@
-import events from './events.js?v=179';
+import events from './events.js?v=185';
 
 /**
  * ChronosState - The Single Source of Truth for the application.
@@ -71,6 +71,7 @@ const ChronosState = {
     resetFilters: function () {
         this.currentQuery = "";
         this.currentColumnFilters = {};
+        this.selectedIds = [];
         this.startTime = "";
         this.endTime = "";
         events.emit('FILTERS_CHANGED', { query: "", colFilters: {} });

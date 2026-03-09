@@ -19,7 +19,7 @@ It ingests multi-format evidence (EVTX, CSV, MFT, Plist, XLSX), applies Sigma/YA
 **Hard rules:**
 - All file I/O must use streaming (Polars `scan_*`/`sink_*`) for datasets > 50MB.
 - Never block the event loop — use `asyncio.to_thread()` for CPU-bound Polars work.
-- JS cache-bust: append `?v=XXX` to all static imports. Increment on every release.
+- JS cache-bust: **AUTOMATED** — `ASSET_VERSION` computed at startup via MD5 hash of main.js + CSS. Template uses `{{ v }}`. No more manual `?v=XXX`.
 
 ## 3. Coding Standards (DFIR & Zimmerman Logic)
 
@@ -61,6 +61,18 @@ Always verify claims against actual source code, not skill heuristics or documen
 ### Session Continuity
 - Consult `memory/MEMORY.md` at session start for project state.
 - After major changes, update memory files to reflect new architecture decisions.
+- Read `.agents/STATUS.md` + `MANDATES.md` for current priorities (~60 lines total).
+
+### Skill Registry
+- `engine/skill_router.py` — Central registry of all 76 skills with integration status.
+- Categories: `active`, `wired`, `prompt_only`, `frontend`, `rules`.
+- Run `python engine/skill_router.py` to see summary report.
+- Before adding new skills, check registry first. Before claiming a skill is "implemented", verify it has `active` status.
+
+### CI/CD & Quality Gates
+- **Pre-commit hook** (`.git/hooks/pre-commit`): app.py < 2000 lines, 0 pandas, pytest.
+- **GitHub Actions** (`.github/workflows/ci.yml`): Full test suite + constraints + Sigma validation.
+- `app_logic.py` is DEPRECATED (orphaned bridge to non-existent skills). Do not import.
 
 ---
 
@@ -222,3 +234,127 @@ Always verify claims against actual source code, not skill heuristics or documen
 - "NEVER use Pandas" → ✅ 0 pandas in app.py (only `timeline_skill.py` legacy)
 - "Keep `app.py` under 2000 lines" → ✅ 1,528 lines
 - "Never fabricate timestamps" → ✅ Resolved v179
+
+### v180.3 Workflow Overhaul (2026-03-08)
+
+**Skill Registry & Audit:**
+1. **`engine/skill_router.py` created** — Central registry of all 76 skills. Each skill categorized as: `active` (10), `frontend` (5), `rules` (5), `wired` (4), `prompt_only` (52). Includes helper functions: `get_skill_summary()`, `get_high_priority_prompts()`, `print_registry_report()`.
+2. **Dead code cleaned** — Removed `build_chronos_timeseries` dead import from app.py (was imported but never called). `app_logic.py` confirmed orphaned (already in .gitignore).
+3. **5 high-priority skills identified** for future activation: `chronos_correlation_architect`, `chronos_chain_of_custody`, `chronos_mitre_strategist`, `chronos_execution_forensics`, `chronos_session_grouper`.
+
+**Multi-Agent Communication Restructured:**
+4. **`.agents/` folder structure** — Created:
+   - `STATUS.md` — Current state (~30 lines, replaces 1,020-line GEMINI_CLI_CHANNEL.md)
+   - `MANDATES.md` — Prioritized checklist of pending work
+   - `SCORECARD.md` — Historical scores by version (v177→v180.2)
+   - `DECISION_LOG.md` — 5 Architecture Decision Records (ADRs)
+   - `RUNBOOK_TEMPLATE.md` — Session template for multi-agent coordination
+   - `audits/` — Archive directory for past audit reports
+
+**CI/CD & Automation:**
+5. **Pre-commit hook** (`.git/hooks/pre-commit`) — Checks: app.py < 2000 lines, no pandas, pytest.
+6. **GitHub Actions** (`.github/workflows/ci.yml`) — Automated: pytest, code constraints, Sigma rules validation, skill registry integrity.
+7. **Auto-cachebust** — `ASSET_VERSION = MD5(main.js + CSS)[:8]` computed at startup. Template uses `{{ v }}` instead of manual `?v=179`. Never stale cache again.
+
+**Documentation:**
+8. **README.md updated** — Added sections: Skills Architecture, Detection Engine, Multi-Agent Workflow, CI/CD.
+9. **CLAUDE.md updated** — Added: Skill Registry protocol, CI/CD quality gates, auto-cachebust rule.
+
+**Skills Activated (v180.3b):**
+10. **Chain of Custody** — SHA256 hash computed during streaming upload (zero extra I/O). Hash + file size returned in `chain_of_custody` field of upload response. Skill `chronos_chain_of_custody` → ACTIVE.
+11. **Timeseries Builder** — `build_chronos_timeseries()` wired to new `/api/timeseries/{filename}` endpoint. Returns structured chart data with trend analysis (alza/baja/estable). Skill → ACTIVE.
+12. **Pre-commit framework** — Migrated from custom shell hook to `pre-commit` v4.5.1 with `.pre-commit-config.yaml`. Includes: trailing-whitespace, YAML check, large file detection, app.py constraints, pytest.
+13. **Sigma validation** — 86 rules validated against YAML schema (0 errors). All load successfully in `sigma_engine.py`.
+14. **timeline_skill.py confirmed Polars-only** — No pandas dependency (was a stale finding in MEMORY.md).
+
+**Score: 78/100 → 88/100** (see `.agents/SCORECARD.md` for breakdown)
+
+### v180.7 — Estabilización Fase 1 Completa (2026-03-08)
+
+**Etapa 0+1 (Sigma Evidence + YARA + Modal) — Completadas en sesión anterior:**
+- Sigma engine retorna `sample_evidence` (150 filas), `matched_columns`, `all_row_ids` (500)
+- YARA integrado como Task 8 en `asyncio.gather()` del forensic_report (9 tasks total)
+- Correlation chains incluyen `row_ids` por entidad (150 IDs)
+- Modal forense expandible: tabla de evidencia por regla Sigma + "View all in Grid"
+- Context export (JSON) incluye `sigma_detections` con evidence + `yara_detections`
+- 5 bugs de exports/filtros corregidos (selected_ids en HTML report, dashboard con filtros, col_filters estandarizado, empty_columns con selected_ids, PDF con filtros)
+
+**Estabilización v2 (8 bugs de testing real con 38K EVTX events):**
+
+1. **Bug A: Row selection no respetado en exports** — `grid.js` ahora usa `_persistentSelectedIds` Set que persiste selecciones entre páginas AJAX. Eventos `rowSelected`/`rowDeselected` individuales reemplazan `rowSelectionChanged`.
+
+2. **Bug B: Dashboard/TTPs no actualizan con filtros** — `main.js:setupStateObservers()` ahora escucha `FILTERS_CHANGED` y `TIME_RANGE_CHANGED` con debounce 1200ms para llamar `loadDashboardCards()`.
+
+3. **Bug C: Hex corrompido en CSV/XLSX** — CSV: UTF-8 BOM prepended para que Excel reconozca encoding. XLSX: escritura manual con `xlsxwriter` usando `write_string()` + `num_format='@'` para columnas hex/hash/guid. Header con formato bold + color.
+
+4. **Bug D: Charts "saltan" en updates** — `animation: { duration: 300 }` en timeline y distribution charts.
+
+5. **Bug E: Context modal CSV/Excel exportaba datos raw** — Nuevo `_exportForensicSummaryCSV()` genera resumen con secciones: Sigma hits, YARA, correlación, risk justification. Incluye BOM UTF-8.
+
+6. **Bug F: PDF ilegible** — Print CSS: `.snippet-box` fondo claro + texto oscuro, risk badges mantienen colores por nivel (Critical=rojo, High=naranja, Medium=amarillo, Low=verde). Leyenda de colores del chart (Peak/Above mean/Normal/Average) agregada como HTML estático.
+
+7. **Bug G: Sigma evidence con pocas columnas** — `FORENSIC_CONTEXT_COLUMNS` constante en `sigma_engine.py` con 27 columnas forenses clave (User, Process, IP, CommandLine, etc.). Se agregan automáticamente si existen en los datos (max 12 cols totales).
+
+8. **Bug H: Composición de filtros** — Derivado de Bug A. `_apply_standard_processing()` ya aplicaba correctamente: query → col_filters → selected_ids → time → sort. Con la selección persistente, la composición funciona end-to-end.
+
+**Archivos modificados:**
+| Archivo | Cambios |
+|---------|---------|
+| `engine/sigma_engine.py` | `FORENSIC_CONTEXT_COLUMNS` + enriquecimiento automático de evidence |
+| `static/js/main.js` | Listeners dashboard refresh con debounce |
+| `static/js/charts.js` | `animation: { duration: 300 }` |
+| `static/js/grid.js` | `_persistentSelectedIds` Set + rowSelected/rowDeselected |
+| `app.py` | CSV BOM + XLSX xlsxwriter con text format |
+| `static/js/actions.js` | `_exportForensicSummaryCSV()` para modal context |
+| `templates/static_report.html` | Print CSS fixes + chart color legend |
+
+**Tests: 68/68 passing** (2 pre-existing async failures excluded)
+
+### Development Phases — Estado del Roadmap
+
+| Fase | Estado | Descripción |
+|------|--------|-------------|
+| Etapa 0: Exports/Filtros | COMPLETADA | 5 bugs corregidos |
+| Etapa 1: TTP Context Enrichment | COMPLETADA | Sigma evidence, YARA, correlation row_ids, modal expandible |
+| Etapa 1.5: Estabilización v2 | COMPLETADA | 8 bugs de testing real (hex, selection, dashboard, charts, PDF) |
+| Etapa 2: DuckDB Cases | PENDIENTE | `engine/case_db.py` + `engine/case_router.py` existen, falta duckdb + tests |
+| Etapa 3: Sidebar + Journal UI | PENDIENTE | Frontend de gestión de casos |
+| Etapa 4: Multi-File Correlation | PENDIENTE | Cross-file timeline unificada |
+| Etapa 5: MCP Server + AI Chat | PENDIENTE | Integración LLM contextual |
+| Etapa 6: Auto-Narrativa | PENDIENTE | Generación de informe forense automático |
+
+### v181 — Cache Bust + Export Integrity + TTP UX (2026-03-08)
+
+**Root Cause**: All v180.7 fixes were invisible because the server was never restarted. Browser showed v176 in tab title. JS modules cached at `?v=180`.
+
+**Cache Bust Fix:**
+- `main.js` imports bumped `?v=180` → `?v=181` for all 6 module imports
+- **Lesson**: `_compute_asset_hash()` only hashes `main.js` + CSS entry points. Internal module imports use hardcoded `?v=XXX` — must be bumped manually when modules change.
+
+**XLSX Hex Preservation:**
+- Changed `worksheet.write()` (generic, auto-converts) → `worksheet.write_string()` for ALL cells
+- Combined with `infer_schema_length=0` (Polars reads all as Utf8) and `strings_to_numbers: False` (xlsxwriter)
+
+**TTP Summary Strip (New UI):**
+- `#ttp-summary-strip` div below forensic dashboard cards
+- Shows severity badges (CRITICAL: N, HIGH: N) + top 6 MITRE technique pills
+- Updates on `FILTERS_CHANGED` / `TIME_RANGE_CHANGED` via debounce
+- CSS in `chronos_v110.css` (`.ttp-strip`, `.ttp-badge`, `.ttp-tech`)
+
+**Context Export Completeness:**
+- `_buildForensicSummaryRows()` rewritten: now exports ALL 12+ sections from modal (timeline, forensic summary, hunting, identity, sigma+evidence, YARA, MITRE kill chain, correlation, sessions, risk)
+- `/api/export/forensic-summary` endpoint rewritten with helper functions (`write_section`, `write_subsection`, `write_headers`, `write_list_table`)
+
+**HTML Report:**
+- Sigma evidence tables use expandable `<details>` blocks with sample_evidence rows
+- Print CSS: 30+ overrides for sigma, hunting, context sections; auto-expand details in print
+
+**`_sigma_hits_html` scoping fix:**
+- Was using fragile `'_sigma_hits_html' in dir()` check
+- Fixed: initialize `_sigma_hits_html = []` before try/except block
+
+**Skills Created/Updated:**
+- `.agents/skills/chronos_export_testing/SKILL.md` — 10 comprehensive export tests
+- `.agents/skills/chronos_filter_diagnostics/SKILL.md` — added TTP + cache symptoms
+
+**Próximo paso**: Etapa 2 — `pip install duckdb`, verificar CRUD, tests de integración.

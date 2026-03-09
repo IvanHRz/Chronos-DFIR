@@ -57,5 +57,19 @@ export const API = {
     async resetSession() {
         const response = await fetch('/api/reset', { method: 'POST' });
         return await response.json();
+    },
+
+    async getEnrichmentConfig() {
+        const response = await fetch('/api/enrichment/config');
+        return await response.json();
+    },
+
+    async lookupIOC(iocValue, iocType) {
+        const response = await fetch('/api/enrichment/lookup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ioc_value: iocValue, ioc_type: iocType })
+        });
+        return await response.json();
     }
 };

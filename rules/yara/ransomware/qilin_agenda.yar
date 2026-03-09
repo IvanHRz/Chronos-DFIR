@@ -60,9 +60,10 @@ rule QILIN_Ransomware_Strings_Windows {
     condition:
         (any of ($note*)) or
         ($chacha20 and any of ($config*)) or
-        ($vss_del1 and $bcdedit) or
-        ($go_runtime and any of ($note*, $config*)) or
-        2 of ($config*)
+        (($vss_del1 or $vss_del2) and $bcdedit) or
+        (($go_runtime or $go_build1 or $go_build2) and any of ($note*, $config*)) or
+        2 of ($config*) or
+        (any of ($kill_sql, $kill_exchange, $kill_av, $kill_backup) and any of ($note*, $vss_del1, $vss_del2))
 }
 
 rule QILIN_Ransomware_ESXi_Linux {
@@ -107,8 +108,10 @@ rule QILIN_Ransomware_ESXi_Linux {
     condition:
         (any of ($esxi_*)) or
         (any of ($note_esxi*) and any of ($go_elf*)) or
-        ($ext_pattern and $tmp_stage) or
-        (2 of ($esxi_*) and any of ($go_elf*))
+        ($ext_pattern and ($tmp_stage or $tmp_stage2 or $stage_dir)) or
+        (2 of ($esxi_*) and any of ($go_elf*)) or
+        ($log_wipe or $esxi_log2) or
+        ($vmkfstools and any of ($esxi_*, $note_esxi*))
 }
 
 rule QILIN_Ransomware_Rclone_Exfiltration {
@@ -138,7 +141,8 @@ rule QILIN_Ransomware_Rclone_Exfiltration {
     condition:
         $rclone and
         (any of ($rclone_copy, $rclone_sync, $rclone_config)) and
-        (any of ($rclone_remote*) or $rclone_no_log or $rclone_transfers)
+        (any of ($rclone_remote*) or $rclone_no_log or $rclone_log or $rclone_transfers) or
+        ($rclone and ($qilin_ref or $agenda_ref))
 }
 
 rule QILIN_Ransomware_Registry_Persistence {
@@ -168,7 +172,8 @@ rule QILIN_Ransomware_Registry_Persistence {
     condition:
         any of ($safemode_reg*) or
         ($safemode_runkey and $qilin_note) or
-        ($safemode_reg1 and $auto_start)
+        ($safemode_reg1 and $auto_start) or
+        ($safemode_net and ($safemode_value or $safemode_value2))
 }
 
 rule QILIN_Network_C2_Communication {
@@ -198,5 +203,6 @@ rule QILIN_Network_C2_Communication {
     condition:
         ($onion1 and any of ($panel*)) or
         (any of ($victim_id, $public_key, $ransom_key) and $http_post) or
-        ($panel1 and $panel_login and $content_type)
+        ($panel1 and $panel_login and $content_type) or
+        ($tor_browser and any of ($panel*))
 }

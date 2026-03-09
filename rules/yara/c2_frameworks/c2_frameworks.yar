@@ -32,7 +32,7 @@ rule C2_CobaltStrike_Beacon_Strings {
         $pipe_name = "\\\\.\\pipe\\MSSE-" ascii
         $named_pipe = "\\pipe\\" ascii
     condition:
-        pe.is_pe and (2 of ($cs*) or ($pipe_name or $sleep_mask)) or
+        pe.is_pe and (2 of ($cs*) or ($pipe_name or $sleep_mask or $metadata or $named_pipe)) or
         (not pe.is_pe and 3 of ($cs*))
 }
 
@@ -122,5 +122,6 @@ rule C2_Generic_DNS_Tunneling {
         $long_subdomain = /[a-zA-Z0-9]{40,}\.[a-zA-Z]{2,10}/ ascii
     condition:
         $iodine or $dnscat or
-        ($dns_query and $txt_record and ($base32 or $base64_alpha))
+        ($dns_query and $txt_record and ($base32 or $base64_alpha)) or
+        $long_subdomain
 }

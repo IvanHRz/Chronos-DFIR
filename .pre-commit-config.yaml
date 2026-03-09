@@ -1,0 +1,42 @@
+repos:
+  # Python linting
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+      - id: check-merge-conflict
+
+  # Chronos-DFIR custom checks
+  - repo: local
+    hooks:
+      - id: chronos-app-linecount
+        name: "app.py < 2500 lines"
+        entry: >
+          bash -c 'LINES=$(wc -l < app.py | tr -d " ");
+          [ "$LINES" -lt 2500 ] ||
+          (echo "FAIL: app.py has $LINES lines (max 2500)" && exit 1)'
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: chronos-no-pandas
+        name: "No pandas in app.py"
+        entry: >
+          bash -c 'if grep -q "import pandas" app.py;
+          then echo "FAIL: pandas detected in app.py" && exit 1; fi'
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: chronos-pytest
+        name: "Run Chronos tests"
+        entry: >
+          python -m pytest tests/test_ingestor.py tests/test_api.py -q --tb=short
+        language: system
+        pass_filenames: false
+        always_run: true

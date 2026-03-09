@@ -26,6 +26,14 @@ import traceback
 import re
 from typing import List, Optional, Any
 from pydantic import BaseModel
+import asyncio
+
+# Load .env for API keys (if present)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 # Configure Logging
 logging.basicConfig(
@@ -37,18 +45,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("Chronos-DFIR")
 
-# Add skill path for timeseries builder
-SKILL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".agents", "skills", "chronos_timeseries_builder")
-if os.path.exists(SKILL_PATH):
-    sys.path.append(SKILL_PATH)
-    try:
-        from builder import build_chronos_timeseries
-        logger.info("Chronos Timeseries Builder skill loaded successfully.")
-    except Exception as e:
-        logger.error(f"Failed to load Chronos Timeseries Builder skill: {e}")
-        def build_chronos_timeseries(lf, **kwargs): return {"error": f"Builder not loaded: {e}"}
-else:
-    def build_chronos_timeseries(lf, **kwargs): return {"error": "Builder path not found"}
+# NOTE: chronos_timeseries_builder (builder.py) is available in .agents/skills/
+# but not wired into any endpoint yet. See engine/skill_router.py for status.
+# To activate: import and call build_chronos_timeseries() in chart/histogram endpoint.
 
 # Helper to sanitize filenames
 def sanitize_filename(filename: str) -> str:
@@ -76,7 +75,7 @@ async def hard_reset():
     try:
         # 1. Clear processed_files cache
         processed_files.clear()
-        
+
         # 2. Cleanup directories
         for folder in ["chronos_uploads", "chronos_output"]:
             if os.path.exists(folder):
@@ -89,15 +88,25 @@ async def hard_reset():
                             shutil.rmtree(file_path)
                     except Exception as e:
                         logger.error(f"Failed to delete {file_path} during reset: {e}")
-        
+
         logger.info("Hard Reset completed: Cache and folders cleared.")
         return JSONResponse(content={"message": "Hard reset successful. Data cleared."}, status_code=200)
     except Exception as e:
         logger.error(f"Hard Reset failed: {e}")
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
+# Mount Case Management Router
+from engine.case_router import case_router
+app.include_router(case_router)
+
 @app.on_event("startup")
 async def startup_event():
+    # Initialize Case Database
+    try:
+        from engine.case_db import init_db
+        init_db()
+    except Exception as e:
+        logger.warning(f"Case DB init skipped: {e}")
     logger.info("Startup cleanup complete: /chronos_uploads and /chronos_output cleared.")
 
 # Directories
@@ -108,7 +117,7 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
 
 # Global Cache
-processed_files = {} 
+processed_files = {}
 
 # Ensure directories exist
 for d in [OUTPUT_DIR, UPLOAD_DIR, STATIC_DIR, TEMPLATES_DIR]:
@@ -117,6 +126,24 @@ for d in [OUTPUT_DIR, UPLOAD_DIR, STATIC_DIR, TEMPLATES_DIR]:
 # Mount statics and templates
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
+
+# Auto-cachebust: compute hash of key static assets at startup
+import hashlib
+
+def _compute_asset_hash():
+    """MD5 hash of main JS + CSS files for automatic cache-busting."""
+    files_to_hash = [
+        os.path.join(STATIC_DIR, "js", "main.js"),
+        os.path.join(STATIC_DIR, "chronos_v110.css"),
+    ]
+    h = hashlib.md5()
+    for fp in files_to_hash:
+        if os.path.exists(fp):
+            h.update(open(fp, "rb").read())
+    return h.hexdigest()[:8]
+
+ASSET_VERSION = _compute_asset_hash()
+logger.info(f"Asset version hash: {ASSET_VERSION}")
 
 # Disable Caching Middleware
 @app.middleware("http")
@@ -129,21 +156,33 @@ async def add_no_cache_header(request: Request, call_next):
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
-    response = templates.TemplateResponse("index.html", {"request": request})
+    response = templates.TemplateResponse("index.html", {"request": request, "v": ASSET_VERSION})
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     return response
 
 @app.post("/upload")
-async def process_file(file: UploadFile = File(...), artifact_type: str = Form(...)):
+async def process_file(
+    file: UploadFile = File(...),
+    artifact_type: str = Form(...),
+    case_id: Optional[str] = Form(None),
+    phase_id: Optional[str] = Form(None),
+):
     from engine.ingestor import ingest_file, normalize_and_save
     try:
         file_path = os.path.join(UPLOAD_DIR, file.filename)
 
         # STREAMING UPLOAD: Stream directly to disk to handle 6GB+ files
+        # Chain of Custody: compute SHA256 hash during upload (zero extra I/O)
+        sha256 = hashlib.sha256()
         with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            while chunk := file.file.read(8192):
+                sha256.update(chunk)
+                buffer.write(chunk)
+        file_hash = sha256.hexdigest()
+        file_size = os.path.getsize(file_path)
+        logger.info(f"Chain of Custody — {file.filename}: SHA256={file_hash}, Size={file_size}")
 
         ext = os.path.splitext(file.filename)[1].lower()
 
@@ -174,6 +213,22 @@ async def process_file(file: UploadFile = File(...), artifact_type: str = Form(.
                     logger.error(f"Raw copy FAILED: {copy_e}")
                 row_count = "Unknown"
 
+            # Register file in case database if case context provided
+            _file_id = None
+            if case_id:
+                try:
+                    from engine.case_db import register_file as _reg_file
+                    _rc = int(row_count) if isinstance(row_count, (int, float)) else 0
+                    _file_id = _reg_file(
+                        case_id=case_id, phase_id=phase_id,
+                        original_filename=file.filename,
+                        processed_filename=csv_filename,
+                        sha256=file_hash, file_size=file_size,
+                        file_category=file_cat, row_count=_rc,
+                    )
+                except Exception as reg_e:
+                    logger.warning(f"Case file registration failed: {reg_e}")
+
             return {
                 "status": "success",
                 "message": "File uploaded successfully",
@@ -182,7 +237,13 @@ async def process_file(file: UploadFile = File(...), artifact_type: str = Form(.
                 "xlsx_filename": None,
                 "processed_records": row_count,
                 "file_category": file_cat,
-                "original_filename": file.filename
+                "original_filename": file.filename,
+                "file_id": _file_id,
+                "chain_of_custody": {
+                    "sha256": file_hash,
+                    "file_size_bytes": file_size,
+                    "original_filename": file.filename,
+                }
             }
 
         # Forensic Processing (MFT/EVTX)
@@ -197,6 +258,22 @@ async def process_file(file: UploadFile = File(...), artifact_type: str = Form(.
         filename = os.path.basename(csv_path)
         processed_files[file.filename] = filename
 
+        # Register forensic file in case database
+        _file_id = None
+        if case_id:
+            try:
+                from engine.case_db import register_file as _reg_file
+                _file_id = _reg_file(
+                    case_id=case_id, phase_id=phase_id,
+                    original_filename=file.filename,
+                    processed_filename=filename,
+                    sha256=file_hash, file_size=file_size,
+                    file_category='forensic',
+                    row_count=result.get("processed_records", 0) or 0,
+                )
+            except Exception as reg_e:
+                logger.warning(f"Case file registration failed: {reg_e}")
+
         return {
             "status": "success",
             "message": "File processed successfully",
@@ -204,7 +281,13 @@ async def process_file(file: UploadFile = File(...), artifact_type: str = Form(.
             "processed_records": result.get("processed_records"),
             "csv_filename": filename,
             "xlsx_filename": os.path.basename(result['files']['excel']),
-            "original_filename": file.filename
+            "original_filename": file.filename,
+            "file_id": _file_id,
+            "chain_of_custody": {
+                "sha256": file_hash,
+                "file_size_bytes": file_size,
+                "original_filename": file.filename,
+            }
         }
 
     except Exception as e:
@@ -273,7 +356,7 @@ async def get_data(request: Request, filename: str, page: int = 1, size: int = 5
                      "start_time": None,
                      "end_time": None
                  }
-                 
+
             # Try to determine max/min time overall for the view
             view_start = None
             view_end = None
@@ -298,7 +381,7 @@ async def get_data(request: Request, filename: str, page: int = 1, size: int = 5
             # Final normalization for display
             q = normalize_time_columns_in_df(q)
             df_page = q.collect(streaming=True)
-            
+
             return {
                 "current_page": page,
                 "last_page": last_page,
@@ -325,7 +408,7 @@ from engine.analyzer import analyze_dataframe
 
 
 @app.get("/api/empty_columns/{filename}")
-async def get_empty_columns(filename: str, query: Optional[str] = None, start_time: Optional[str] = None, end_time: Optional[str] = None, col_filters: Optional[str] = None):
+async def get_empty_columns(filename: str, query: Optional[str] = None, start_time: Optional[str] = None, end_time: Optional[str] = None, col_filters: Optional[str] = None, selected_ids: Optional[str] = None):
     """
     Identifies completely empty columns (all nulls or empty strings).
     Calculated via Polars lazy evaluation for out-of-core extremely large files.
@@ -338,7 +421,7 @@ async def get_empty_columns(filename: str, query: Optional[str] = None, start_ti
         csv_path = os.path.join(OUTPUT_DIR, filename)
         if not os.path.exists(csv_path):
             return JSONResponse(content={"error": "File not found"}, status_code=404)
-        
+
         # Scan to get lazy frame
         try:
             lf = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=0)
@@ -349,12 +432,21 @@ async def get_empty_columns(filename: str, query: Optional[str] = None, start_ti
         schema = lf.collect_schema()
         all_cols = schema.names()
 
+        # Parse selected_ids from JSON string if provided
+        parsed_selected_ids = []
+        if selected_ids:
+            try:
+                parsed_selected_ids = json.loads(selected_ids)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
         # Apply Unified Processing
         params = {
             "query": query,
             "col_filters": col_filters,
             "start_time": start_time,
-            "end_time": end_time
+            "end_time": end_time,
+            "selected_ids": parsed_selected_ids
         }
         lf = _apply_standard_processing(lf, params)
 
@@ -362,24 +454,24 @@ async def get_empty_columns(filename: str, query: Optional[str] = None, start_ti
         exprs = []
         # Common string representations of null/empty in forensics
         null_regex = r"^(?i)(-+|n/?a|null|none|nan|undefined|unknown|\s*)$"
-        
+
         for c in all_cols:
             exprs.append(
                 (
-                    pl.col(c).is_null() | 
+                    pl.col(c).is_null() |
                     (pl.col(c).cast(pl.Utf8, strict=False).str.contains(null_regex).fill_null(False))
                 ).all().alias(c)
             )
-            
+
         # Collect this single row result
         res = lf.select(exprs).collect(streaming=True)
-        
+
         # Exclude internal/index columns that always contain data
         INTERNAL_COLS = {"_id", "No.", "Original_No."}
         empty_cols = [c for c in all_cols if res[c][0] and c not in INTERNAL_COLS]
-        
+
         return {"empty_columns": empty_cols}
-        
+
     except Exception as e:
         logger.error(f"Error checking empty columns: {e}")
         import traceback
@@ -387,7 +479,7 @@ async def get_empty_columns(filename: str, query: Optional[str] = None, start_ti
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 @app.get("/api/histogram/{filename}")
-async def get_histogram(filename: str, exclude_id: str = None, start_time: str = None, end_time: str = None, query: str = None, col_filters: str = None):
+async def get_histogram(filename: str, exclude_id: str = None, start_time: str = None, end_time: str = None, query: str = None, col_filters: str = None, selected_ids: str = None):
     """
     Get Histogram for FULL file (standard view).
     Supports ?exclude_id=4624 to hide specific EventID.
@@ -428,7 +520,8 @@ async def get_histogram(filename: str, exclude_id: str = None, start_time: str =
             "query": query,
             "col_filters": col_filters,
             "start_time": start_time,
-            "end_time": end_time
+            "end_time": end_time,
+            "selected_ids": selected_ids
         }
         df = _apply_standard_processing(df, params)
 
@@ -456,6 +549,38 @@ async def get_histogram(filename: str, exclude_id: str = None, start_time: str =
 class SubsetRequest(BaseModel):
     filename: str
     selected_ids: List[Any]
+    query: Optional[str] = ""
+    col_filters: Any = {}
+    start_time: Optional[str] = ""
+    end_time: Optional[str] = ""
+
+@app.get("/api/timeseries/{filename}")
+async def get_timeseries(filename: str):
+    """
+    Timeseries analysis endpoint — uses chronos_timeseries_builder skill.
+    Returns structured chart data with trend analysis and peak detection.
+    """
+    try:
+        csv_path = os.path.join(OUTPUT_DIR, filename)
+        if not os.path.exists(csv_path):
+            return JSONResponse(content={"error": "File not found"}, status_code=404)
+
+        lf = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=10000)
+        time_col = get_primary_time_column(lf.collect_schema().names())
+
+        # Import and run the timeseries builder skill
+        import sys as _sys
+        _skill_path = os.path.join(BASE_DIR, ".agents", "skills", "chronos_timeseries_builder")
+        if _skill_path not in _sys.path:
+            _sys.path.append(_skill_path)
+        from builder import build_chronos_timeseries
+
+        result = await asyncio.to_thread(build_chronos_timeseries, lf, time_col)
+        return result
+    except Exception as e:
+        logger.error(f"Timeseries error: {e}")
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
 
 @app.post("/api/histogram_subset")
 async def get_histogram_subset(req: SubsetRequest):
@@ -476,8 +601,12 @@ async def get_histogram_subset(req: SubsetRequest):
 
         schema = lf.collect_schema()
 
-        # Apply Unified Processing
+        # Apply Unified Processing (all active filters + selected rows)
         params = {
+            "query": req.query,
+            "col_filters": req.col_filters,
+            "start_time": req.start_time,
+            "end_time": req.end_time,
             "selected_ids": req.selected_ids
         }
         lf = _apply_standard_processing(lf, params)
@@ -486,7 +615,7 @@ async def get_histogram_subset(req: SubsetRequest):
         if df_subset.height == 0:
             return {"error": "No matching rows found"}
 
-        result = analyze_dataframe(df_subset, target_bars=30) 
+        result = analyze_dataframe(df_subset, target_bars=30)
         if "error" in result:
             return result
 
@@ -544,9 +673,9 @@ class ExportRequest(BaseModel):
     query: Optional[str] = ""
     start_time: Optional[str] = ""
     end_time: Optional[str] = ""
-    ai_optimized: bool = False 
-    visible_columns: list[str] = [] 
-    original_filename: str = "" 
+    ai_optimized: bool = False
+    visible_columns: list[str] = []
+    original_filename: str = ""
     sort_col: Optional[str] = None
     sort_dir: Optional[str] = None
     chunk_size_mb: Optional[int] = 99
@@ -606,13 +735,15 @@ async def forensic_report(request: ReportRequest):
         lf = _apply_standard_processing(lf, params)
 
         df = lf.collect()
-        
+
         # --- CHRONOS MASTER ANALYZER (Parallel Execution) ---
-        from engine.forensic import sub_analyze_timeline, sub_analyze_context, sub_analyze_hunting, sub_analyze_identity_and_procs
-        
+        from engine.forensic import (sub_analyze_timeline, sub_analyze_context,
+            sub_analyze_hunting, sub_analyze_identity_and_procs,
+            correlate_cross_source, group_sessions, detect_execution_artifacts)
+
         import asyncio
         start_p = time.perf_counter()
-        
+
         # Pre-process time columns
         df_p = df.clone()
         for col in TIME_HIERARCHY:
@@ -622,31 +753,100 @@ async def forensic_report(request: ReportRequest):
                 except: pass
 
         from engine.sigma_engine import match_sigma_rules, load_sigma_rules
+
+        # YARA scan helper — best-effort, first 5MB of CSV text
+        def _yara_scan_for_report(file_path):
+            yara_rules = _load_yara_rules()
+            if yara_rules is None:
+                return []
+            try:
+                with open(file_path, "r", errors="replace") as f:
+                    text = f.read(5 * 1024 * 1024)
+                matches = yara_rules.match(data=text)
+                return [{
+                    "rule": m.rule,
+                    "namespace": m.namespace,
+                    "tags": list(m.tags),
+                    "strings_matched": len(m.strings),
+                    "meta": {k: str(v) for k, v in (m.meta or {}).items()} if hasattr(m, 'meta') and m.meta else {},
+                } for m in matches]
+            except Exception as e:
+                logger.debug(f"YARA scan in forensic report: {e}")
+                return []
+
         tasks = [
-            asyncio.to_thread(sub_analyze_timeline, df_p),
-            asyncio.to_thread(sub_analyze_context, df_p),
-            asyncio.to_thread(sub_analyze_hunting, df_p),
-            asyncio.to_thread(sub_analyze_identity_and_procs, df_p),
-            asyncio.to_thread(match_sigma_rules, df_p, load_sigma_rules())
+            asyncio.to_thread(sub_analyze_timeline, df_p),       # 0
+            asyncio.to_thread(sub_analyze_context, df_p),         # 1
+            asyncio.to_thread(sub_analyze_hunting, df_p),         # 2
+            asyncio.to_thread(sub_analyze_identity_and_procs, df_p),  # 3
+            asyncio.to_thread(match_sigma_rules, df_p, load_sigma_rules()),  # 4
+            asyncio.to_thread(correlate_cross_source, df_p),      # 5
+            asyncio.to_thread(group_sessions, df_p),              # 6
+            asyncio.to_thread(detect_execution_artifacts, df_p),  # 7
+            asyncio.to_thread(_yara_scan_for_report, csv_path),   # 8
         ]
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+
         formatted_results = []
         sigma_hits_result = []
+        correlation_result = {}
+        session_result = []
+        exec_artifacts_result = {}
+        yara_hits_result = []
         for i, r in enumerate(results):
             if isinstance(r, Exception):
-                if i == 4:  # sigma engine index
+                if i == 4:
                     logger.debug(f"Sigma engine error: {r}")
+                elif i == 8:
+                    logger.debug(f"YARA scan error: {r}")
+                elif i >= 5:
+                    logger.debug(f"Skill task {i} error: {r}")
                 else:
                     formatted_results.append(f"### Error in Analysis ###\n{str(r)}")
-            elif i == 4:  # sigma engine returns list
+            elif i == 4:
                 sigma_hits_result = r if isinstance(r, list) else []
+            elif i == 5:
+                correlation_result = r if isinstance(r, dict) else {}
+            elif i == 6:
+                session_result = r if isinstance(r, list) else []
+            elif i == 7:
+                exec_artifacts_result = r if isinstance(r, dict) else {}
+            elif i == 8:
+                yara_hits_result = r if isinstance(r, list) else []
             else:
                 formatted_results.append(r)
 
+        # MITRE kill chain mapping (fast, runs on sigma_hits — no separate thread needed)
+        from engine.forensic import map_mitre_from_sigma
+        mitre_kill_chain = map_mitre_from_sigma(sigma_hits_result)
+
+        # --- THREAT INTELLIGENCE ENRICHMENT (non-blocking, post-pipeline) ---
+        enrichment_result = {}
+        try:
+            from engine.enrichment import deduplicate_iocs, enrich_all_iocs, load_api_keys
+            api_keys = load_api_keys()
+            if any(api_keys.values()):
+                # Extract context_data from Task 1 results
+                context_data = {}
+                for r in formatted_results:
+                    if isinstance(r, dict) and r.get("type") == "context":
+                        context_data = r
+                        break
+                iocs = deduplicate_iocs(context_data, session_result, correlation_result)
+                if any(iocs.values()):
+                    enrichment_result = await asyncio.wait_for(
+                        enrich_all_iocs(iocs, api_keys),
+                        timeout=30.0
+                    )
+                    logger.info(f"Enrichment: {enrichment_result.get('total_enriched', 0)} IOCs enriched via {len(enrichment_result.get('providers_used', []))} providers")
+        except asyncio.TimeoutError:
+            logger.warning("Enrichment timed out after 30s, returning partial results")
+        except Exception as e:
+            logger.debug(f"Enrichment phase skipped: {e}")
+
         end_p = time.perf_counter()
-        logger.info(f"Forensic Report generated in {end_p - start_p:.2f}s for {df.height} records | Sigma hits: {len(sigma_hits_result)}")
+        logger.info(f"Forensic Report generated in {end_p - start_p:.2f}s for {df.height} records | Sigma hits: {len(sigma_hits_result)} | YARA hits: {len(yara_hits_result)} | Correlations: {correlation_result.get('total_correlated', 0)} | Sessions: {len(session_result)} | Artifacts: {len(exec_artifacts_result.get('artifact_types_detected', []))}")
 
         # --- Derive dashboard card values from data ---
         cols = df.columns
@@ -698,7 +898,7 @@ async def forensic_report(request: ReportRequest):
                 primary_identity = context_data["ips"][0].get("id", "N/A")
         except:
              pass
-             
+
         if primary_identity == "N/A":
              for id_col in ["User", "ProcessUser", "SubjectUserName", "AccountName", "UserName", "primary_user"]:
                  if id_col in cols:
@@ -748,7 +948,13 @@ async def forensic_report(request: ReportRequest):
             "risk_score": risk_score,
             "risk_justify": risk_justify,
             "eps": eps,
-            "sigma_hits": sigma_hits_result
+            "sigma_hits": sigma_hits_result,
+            "mitre_kill_chain": mitre_kill_chain,
+            "cross_source_correlation": correlation_result,
+            "session_profiles": session_result,
+            "execution_artifacts": exec_artifacts_result,
+            "yara_hits": yara_hits_result,
+            "threat_intelligence": enrichment_result,
         }
 
 
@@ -757,6 +963,46 @@ async def forensic_report(request: ReportRequest):
         traceback.print_exc()
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
+# --- Threat Intelligence Enrichment Endpoints ---
+
+@app.get("/api/enrichment/config")
+async def enrichment_config():
+    """Return which enrichment providers are configured and cache stats."""
+    try:
+        from engine.enrichment import load_api_keys, get_active_providers
+        from engine.enrichment_cache import EnrichmentCache
+        keys = load_api_keys()
+        cache = EnrichmentCache()
+        return {
+            "providers": get_active_providers(keys),
+            "configured_keys": [k for k, v in keys.items() if v],
+            "cache_stats": cache.stats(),
+        }
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+class IOCLookupRequest(BaseModel):
+    ioc_value: str
+    ioc_type: str  # "ip", "domain", "hash", "email"
+
+
+@app.post("/api/enrichment/lookup")
+async def enrichment_lookup(request: IOCLookupRequest):
+    """On-demand enrichment for a single IOC."""
+    try:
+        from engine.enrichment import enrich_single_ioc
+        result = await asyncio.wait_for(
+            enrich_single_ioc(request.ioc_value, request.ioc_type),
+            timeout=15.0,
+        )
+        return result
+    except asyncio.TimeoutError:
+        return JSONResponse(content={"error": "Enrichment timed out"}, status_code=504)
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
 @app.post("/api/export_filtered")
 async def export_filtered(request: ExportRequest, background_tasks: BackgroundTasks):
     import polars as pl
@@ -764,7 +1010,8 @@ async def export_filtered(request: ExportRequest, background_tasks: BackgroundTa
     import time
     from fastapi.responses import FileResponse, JSONResponse
     logger.info(f"[EXPORT_FILTERED] query={request.query!r}, col_filters={request.col_filters!r}, "
-                f"start={request.start_time!r}, end={request.end_time!r}, format={request.format!r}")
+                f"start={request.start_time!r}, end={request.end_time!r}, format={request.format!r}, "
+                f"selected_ids={request.selected_ids!r} (len={len(request.selected_ids) if request.selected_ids else 0})")
 
     try:
         csv_path = os.path.join(OUTPUT_DIR, request.filename)
@@ -781,7 +1028,7 @@ async def export_filtered(request: ExportRequest, background_tasks: BackgroundTa
         schema = lf.collect_schema()
         if "_id" not in schema.names():
             lf = lf.with_row_index(name="_id", offset=1)
-        
+
         # Apply Unified Processing
         params = {
             "query": request.query,
@@ -845,17 +1092,17 @@ async def export_filtered(request: ExportRequest, background_tasks: BackgroundTa
         if fmt not in ["csv", "xlsx", "json"]:
             fmt = "csv"
         ext = fmt
-        
+
         # AI Optimization: Limit rows to save LLM tokens and force CSV layout
         if request.ai_optimized:
             ext = "txt" # Summary report
-        
+
         # Safety for filename
         base_name = request.original_filename or request.filename
         if not base_name: base_name = "data"
         if request.ai_optimized:
             base_name += "_Context"
-        
+
         # Sanitize base_name
         base_name = sanitize_filename(base_name)
 
@@ -864,29 +1111,45 @@ async def export_filtered(request: ExportRequest, background_tasks: BackgroundTa
 
         if request.ai_optimized:
             # For Context, we collect the full filtered dataset to calculate statistics
-            # Note: For extremely large datasets, we might want to do this lazily, 
+            # Note: For extremely large datasets, we might want to do this lazily,
             # but for IR artifacts it's generally manageable.
             df = lf.collect()
             try:
                 from engine.forensic import generate_export_payloads
                 import json
-                
-                intel_payloads = generate_export_payloads(df)
+
+                # Run YARA scan on the source CSV for the context export
+                yara_context_hits = []
+                try:
+                    yara_rules = _load_yara_rules()
+                    if yara_rules:
+                        with open(csv_path, "r", errors="replace") as yf:
+                            yara_text = yf.read(5 * 1024 * 1024)
+                        yara_matches = yara_rules.match(data=yara_text)
+                        yara_context_hits = [{
+                            "rule": m.rule, "namespace": m.namespace,
+                            "tags": list(m.tags), "strings_matched": len(m.strings),
+                            "meta": {k: str(v) for k, v in (m.meta or {}).items()} if hasattr(m, 'meta') and m.meta else {},
+                        } for m in yara_matches]
+                except Exception as ye:
+                    logger.debug(f"YARA in context export: {ye}")
+
+                intel_payloads = generate_export_payloads(df, yara_hits=yara_context_hits)
                 context_json_str = intel_payloads.get("context_json", "{}")
-                
+
                 out_filename = out_filename.replace(".txt", ".json")
                 out_path = os.path.join(OUTPUT_DIR, out_filename)
-                
+
                 with open(out_path, 'w', encoding='utf-8') as f:
                     f.write(context_json_str)
-                    
+
             except Exception as ai_err:
                 logger.error(f"Context Report generation failed: {ai_err}")
                 stats_header = f"Error generating Context report: {ai_err}\n"
                 stats_header += f"Total Filtered Events: {len(df)}\n"
                 with open(out_path, 'w', encoding='utf-8') as f:
                     f.write(stats_header)
-            
+
             return JSONResponse(content={"download_url": f"/download/{out_filename}", "filename": out_filename})
 
         if ext == "csv":
@@ -905,10 +1168,33 @@ async def export_filtered(request: ExportRequest, background_tasks: BackgroundTa
             ]
             if _csv_cast:
                 lf = lf.with_columns(_csv_cast)
+            # Wrap hex-like values (0x...) in Excel formula ="..." to prevent
+            # Excel/Numbers auto-conversion of hex strings to decimal numbers.
+            _hex_prone_kw = {"hash", "hex", "guid", "address", "ostype", "sid"}
+            _hex_col_names = [c for c in _exp_schema.names()
+                              if any(k in c.lower() for k in _hex_prone_kw)
+                              or c in {"OsType", "SrcFileHashId", "Hash", "TargetFileHashId"}]
+            if _hex_col_names:
+                _hex_wrap = [
+                    pl.when(pl.col(c).str.contains(r"^0[xX]"))
+                      .then(pl.concat_str([pl.lit('="'), pl.col(c), pl.lit('"')]))
+                      .otherwise(pl.col(c))
+                      .alias(c)
+                    for c in _hex_col_names
+                    if c in _exp_schema.names()
+                ]
+                if _hex_wrap:
+                    lf = lf.with_columns(_hex_wrap)
+            # Write CSV with UTF-8 BOM so Excel recognizes encoding and preserves text.
             # quote_style='always' quotes EVERY field unconditionally.
-            # This is the only reliable way to preserve hex values like 0x00000030
-            # in CSV — Excel treats any quoted value as text, never auto-converts.
-            lf.sink_csv(out_path, quote_style="always")
+            import tempfile
+            _tmp_csv = out_path + ".tmp"
+            lf.sink_csv(_tmp_csv, quote_style="always")
+            # Prepend BOM to force Excel to treat file as UTF-8 text
+            with open(_tmp_csv, "rb") as _src, open(out_path, "wb") as _dst:
+                _dst.write(b"\xef\xbb\xbf")  # UTF-8 BOM
+                _dst.write(_src.read())
+            os.remove(_tmp_csv)
         elif ext == "json":
             # Export as standard JSON array [{...}, {...}] — readable by any tool
             cast_exprs = []
@@ -928,10 +1214,10 @@ async def export_filtered(request: ExportRequest, background_tasks: BackgroundTa
             XLSX_ROW_LIMIT = 100000
             if row_count > XLSX_ROW_LIMIT:
                 return JSONResponse(
-                    content={"error": f"Dataset too large for Excel export ({row_count} rows). Please filter your data below {XLSX_ROW_LIMIT} rows or use CSV/JSON export."}, 
+                    content={"error": f"Dataset too large for Excel export ({row_count} rows). Please filter your data below {XLSX_ROW_LIMIT} rows or use CSV/JSON export."},
                     status_code=400
                 )
-                
+
             df = lf.collect()
 
             # Remove internal analysis columns
@@ -948,13 +1234,51 @@ async def export_filtered(request: ExportRequest, background_tasks: BackgroundTa
                    cast_exprs.append(pl.col(col).cast(pl.Utf8))
                 elif dtype == pl.Null or dtype == pl.Object:
                    cast_exprs.append(pl.col(col).cast(pl.Utf8))
-            
+
             if cast_exprs:
                 df = df.with_columns(cast_exprs)
-            
-            df.write_excel(out_path)
 
-        # Do NOT delete the file here. The frontend expects a JSON with download_url, 
+            # Write XLSX with explicit text formatting for hex/hash/guid columns
+            # to prevent Excel from auto-converting values like 0x00000030 to numbers
+            import xlsxwriter
+            workbook = xlsxwriter.Workbook(out_path, {'strings_to_numbers': False})
+            worksheet = workbook.add_worksheet("Data")
+            header_fmt = workbook.add_format({'bold': True, 'bg_color': '#1e3a5f', 'font_color': '#ffffff'})
+            text_fmt = workbook.add_format({'num_format': '@'})  # Force text format
+
+            # Identify columns that need text-force (hex, hash, guid, id patterns)
+            _hex_keywords = {"hash", "hex", "guid", "address", "ostype", "sid", "id"}
+            _text_force_cols = set()
+            for idx, col in enumerate(df.columns):
+                cl = col.lower()
+                if col in problematic_cols or any(k in cl for k in _hex_keywords):
+                    _text_force_cols.add(idx)
+
+            # Force TEXT format at COLUMN level for hex/hash/guid columns
+            # This prevents Numbers.app/Excel from auto-converting "0x00000030" to 30
+            for idx in _text_force_cols:
+                worksheet.set_column(idx, idx, None, text_fmt)
+
+            # Write headers
+            for col_idx, col_name in enumerate(df.columns):
+                worksheet.write(0, col_idx, col_name, header_fmt)
+
+            # Write data rows — use write_string for ALL cells to prevent
+            # Excel auto-conversion of hex (0x...), large numbers, GUIDs, etc.
+            for row_idx, row in enumerate(df.iter_rows()):
+                for col_idx, val in enumerate(row):
+                    if val is None:
+                        worksheet.write_blank(row_idx + 1, col_idx, None)
+                    elif col_idx in _text_force_cols:
+                        worksheet.write_string(row_idx + 1, col_idx, str(val), text_fmt)
+                    else:
+                        # Use write_string for everything to prevent auto-conversion
+                        worksheet.write_string(row_idx + 1, col_idx, str(val))
+
+            worksheet.autofit()
+            workbook.close()
+
+        # Do NOT delete the file here. The frontend expects a JSON with download_url,
         # and the `/download/{filename}` route handles deleting the file after serving it.
         return JSONResponse(content={"download_url": f"/download/{out_filename}", "filename": out_filename})
 
@@ -988,11 +1312,11 @@ async def export_html(request: ExportRequest, background_tasks: BackgroundTasks)
 
         # Apply Filters (Same as export_filtered)
         schema = lf.collect_schema()
-        
+
         # Assign stable row IDs BEFORE filtering if they don't exist
         if "_id" not in schema.names():
             lf = lf.with_row_index(name="_id", offset=1)
-            
+
         params = {
             "query": request.query,
             "col_filters": request.col_filters,
@@ -1001,7 +1325,7 @@ async def export_html(request: ExportRequest, background_tasks: BackgroundTasks)
             "selected_ids": request.selected_ids
         }
         lf = _apply_standard_processing(lf, params)
-        
+
         if request.selected_ids:
              lf = lf.drop("_id").with_row_index(name="_id", offset=1)
 
@@ -1025,7 +1349,7 @@ async def export_html(request: ExportRequest, background_tasks: BackgroundTasks)
             except Exception:
                 context_data = {"type": "context", "event_ids": [], "tactics": [], "threat_actors": []}
                 hunting_data = {"type": "hunting", "patterns": [], "network": []}
-                
+
             context_data["actionable_iocs"] = html_intel.get("Critical_Findings_Table", [])
             context_data["system_anomalies"] = html_intel.get("Anomalous_Processes_Table", [])
         except Exception as e:
@@ -1087,7 +1411,7 @@ async def export_html(request: ExportRequest, background_tasks: BackgroundTasks)
                         .group_by("_clean_event_id").count().sort("count", descending=True).limit(5).collect())
                   top_events = [{"name": str(row["_clean_event_id"]), "count": row["count"]} for row in vc.to_dicts()]
              except: pass
-             
+
         top_providers = []
         provider_cols = ["providername", "source", "logname", "provider_name"]
         p_col_match = next((c for c in all_cols if c.lower() in provider_cols), None)
@@ -1096,13 +1420,15 @@ async def export_html(request: ExportRequest, background_tasks: BackgroundTasks)
                   vc = lf.drop_nulls(p_col_match).group_by(p_col_match).count().sort("count", descending=True).limit(5).collect()
                   top_providers = [{"name": str(row[p_col_match]), "count": row["count"]} for row in vc.to_dicts()]
              except: pass
-                  
+
         df_len = total_filtered
+        _sigma_hits_html = []  # Initialize BEFORE try block to ensure it's always defined
         try:
             from engine.forensic import calculate_smart_risk_m4
             from engine.sigma_engine import match_sigma_rules, load_sigma_rules
             _sigma_rules_html = load_sigma_rules()
             _sigma_hits_html = match_sigma_rules(df_full, _sigma_rules_html)
+            logger.info(f"[HTML_REPORT] Sigma matched: {len(_sigma_hits_html)} rules")
             _risk_html = calculate_smart_risk_m4(df_parsed=df_full, sigma_hits=_sigma_hits_html)
             risk_level = _risk_html.get("Risk_Level", "Low")
             risk_score = _risk_html.get("Risk_Score", 0)
@@ -1112,7 +1438,7 @@ async def export_html(request: ExportRequest, background_tasks: BackgroundTasks)
             risk_level = "Low"
             risk_score = 0
             risk_justify = []
-        
+
         # NOTE: eps was already calculated directly from df_full timestamps above (line ~1407).
         # Do NOT re-assign from stats here — that was overwriting the correct value with 0.
 
@@ -1182,7 +1508,7 @@ async def export_html(request: ExportRequest, background_tasks: BackgroundTasks)
             context_data_json=json.dumps(context_data),
             hunting_data_json=json.dumps(hunting_data),
             threat_actors_json=json.dumps(threat_actors),
-            sigma_hits_json=json.dumps(_sigma_hits_html if '_sigma_hits_html' in dir() else []),
+            sigma_hits_json=json.dumps(_sigma_hits_html),
         )
 
         # Save to temp file
@@ -1198,6 +1524,258 @@ async def export_html(request: ExportRequest, background_tasks: BackgroundTasks)
         import traceback
         traceback.print_exc()
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
+@app.post("/api/export/forensic-summary")
+async def export_forensic_summary(request: Request):
+    """Generate a formatted XLSX forensic summary report from context modal data — ALL sections."""
+    import xlsxwriter
+    try:
+        body = await request.json()
+        filename = body.get("filename", "unknown")
+        summary = body.get("summary", {})
+
+        out_filename = f"Forensic_Summary_{filename.replace('.', '_')}_{int(time.time())}.xlsx"
+        out_path = os.path.join(OUTPUT_DIR, out_filename)
+
+        workbook = xlsxwriter.Workbook(out_path, {'strings_to_numbers': False})
+
+        # Formats
+        title_fmt = workbook.add_format({'bold': True, 'font_size': 14, 'font_color': '#1e3a8a', 'bottom': 2})
+        section_fmt = workbook.add_format({'bold': True, 'font_size': 11, 'font_color': '#ffffff', 'bg_color': '#1e3a5f', 'bottom': 1})
+        subsection_fmt = workbook.add_format({'bold': True, 'font_size': 10, 'font_color': '#1e3a8a', 'bottom': 1, 'italic': True})
+        header_fmt = workbook.add_format({'bold': True, 'bg_color': '#e2e8f0', 'font_color': '#334155', 'bottom': 1})
+        kv_key_fmt = workbook.add_format({'bold': True, 'font_color': '#475569'})
+        kv_val_fmt = workbook.add_format({'font_color': '#1e293b'})
+        text_fmt = workbook.add_format({'num_format': '@', 'text_wrap': True})
+        warn_fmt = workbook.add_format({'font_color': '#dc2626', 'bold': True, 'num_format': '@'})
+        critical_fmt = workbook.add_format({'font_color': '#dc2626', 'bold': True})
+        high_fmt = workbook.add_format({'font_color': '#ea580c', 'bold': True})
+        medium_fmt = workbook.add_format({'font_color': '#d97706', 'bold': True})
+        low_fmt = workbook.add_format({'font_color': '#16a34a', 'bold': True})
+        level_fmts = {'critical': critical_fmt, 'high': high_fmt, 'medium': medium_fmt, 'low': low_fmt}
+
+        ws = workbook.add_worksheet("Forensic Summary")
+        ws.set_column(0, 0, 22)
+        ws.set_column(1, 1, 42)
+        ws.set_column(2, 2, 28)
+        ws.set_column(3, 3, 16)
+        ws.set_column(4, 4, 55)
+
+        # Helper functions
+        def write_section(r, title):
+            ws.merge_range(r, 0, r, 4, title, section_fmt)
+            return r + 1
+
+        def write_subsection(r, title):
+            ws.write_string(r, 0, title, subsection_fmt)
+            return r + 1
+
+        def write_headers(r, cols):
+            for ci, c in enumerate(cols):
+                ws.write_string(r, ci, c, header_fmt)
+            return r + 1
+
+        def write_list_table(r, title, items, key="id"):
+            """Write a named list of {key: str, count: int} items."""
+            if not items:
+                return r
+            r = write_subsection(r, title)
+            r = write_headers(r, ["Name", "Count"])
+            for it in items:
+                name = str(it.get(key) or it.get("name") or "")
+                ws.write_string(r, 0, name, text_fmt)
+                ws.write_string(r, 1, str(it.get("count", 0)), text_fmt)
+                r += 1
+            return r
+
+        row = 0
+        ws.write(row, 0, "CHRONOS-DFIR FORENSIC SUMMARY", title_fmt)
+        row += 2
+
+        # ── 1. HEADER METADATA ──
+        kv_data = [
+            ("File", filename),
+            ("Risk Level", f"{summary.get('risk_level', 'N/A')} (Score: {summary.get('risk_score', 'N/A')})"),
+            ("Primary Identity", summary.get("primary_identity", "N/A")),
+            ("Top Tactic", summary.get("top_tactic", "N/A")),
+            ("Total Records", str(summary.get("total_records", "N/A"))),
+            ("Events/Sec", str(summary.get("eps", "0"))),
+        ]
+        for key, val in kv_data:
+            ws.write_string(row, 0, key, kv_key_fmt)
+            ws.write_string(row, 1, str(val), kv_val_fmt)
+            row += 1
+        row += 1
+
+        # ── 2. RESULTS SECTIONS (timeline, context, hunting, identity) ──
+        results = summary.get("results") or []
+        if isinstance(results, list):
+            for s in results:
+                if not isinstance(s, dict):
+                    continue
+
+                if s.get("type") == "timeline":
+                    row = write_section(row, "TIMELINE ANALYSIS")
+                    peaks = s.get("peaks") or []
+                    if peaks:
+                        row = write_headers(row, ["Peak #", "Hour", "Events"])
+                        for i, p in enumerate(peaks):
+                            ws.write_string(row, 0, str(i + 1), text_fmt)
+                            ws.write_string(row, 1, str(p.get("hour", "")), text_fmt)
+                            ws.write_string(row, 2, str(p.get("count", 0)), text_fmt)
+                            row += 1
+                    if s.get("time_range"):
+                        ws.write_string(row, 0, "Time Range", kv_key_fmt)
+                        ws.write_string(row, 1, str(s["time_range"]), kv_val_fmt)
+                        row += 1
+                    row += 1
+
+                elif s.get("type") == "context":
+                    row = write_section(row, "SANITIZED FORENSIC SUMMARY")
+                    for label, key in [("Top IPs", "ips"), ("Top Users", "users"), ("Top Hosts", "hosts"),
+                                       ("Top Directories", "paths"), ("HTTP Methods", "methods"), ("Violations", "violations")]:
+                        row = write_list_table(row, label, s.get(key), "id")
+                    if s.get("event_ids"):
+                        row = write_list_table(row, "Top Event IDs", s["event_ids"], "id")
+                    if s.get("tactics"):
+                        row = write_subsection(row, "Tactic Distribution")
+                        row = write_headers(row, ["Tactic", "Count"])
+                        for t in s["tactics"]:
+                            ws.write_string(row, 0, str(t.get("category", "")), text_fmt)
+                            ws.write_string(row, 1, str(t.get("count", 0)), text_fmt)
+                            row += 1
+                    row += 1
+
+                elif s.get("type") == "hunting":
+                    row = write_section(row, "CHRONOS HUNTER SUMMARY")
+                    patterns = s.get("patterns") or []
+                    if patterns:
+                        ws.write_string(row, 0, "SUSPICIOUS PATTERNS DETECTED", warn_fmt)
+                        row += 1
+                        row = write_headers(row, ["Timestamp", "User", "Command"])
+                        for p in patterns:
+                            ws.write_string(row, 0, str(p.get("timestamp", "")), text_fmt)
+                            ws.write_string(row, 1, str(p.get("user", "")), text_fmt)
+                            ws.write_string(row, 2, str(p.get("command", "")), text_fmt)
+                            row += 1
+                    if s.get("network"):
+                        row = write_list_table(row, "Top Network Destinations", s["network"], "destination")
+                    if s.get("logons"):
+                        row = write_subsection(row, "Authentication / Logon Summary")
+                        row = write_headers(row, ["Event / Category", "Count"])
+                        for l in s["logons"]:
+                            key = next((k for k in l if k != "count"), "")
+                            ws.write_string(row, 0, str(l.get(key, "")), text_fmt)
+                            ws.write_string(row, 1, str(l.get("count", 0)), text_fmt)
+                            row += 1
+                    row += 1
+
+                elif s.get("type") == "identity":
+                    row = write_section(row, "IDENTITY & ASSETS")
+                    for label, key in [("Top Users", "users"), ("Top Hosts", "hosts"), ("Top Processes", "processes"),
+                                       ("Rare Processes", "rare_processes"), ("Rare Execution Paths", "rare_paths")]:
+                        row = write_list_table(row, label, s.get(key), "name")
+                    row += 1
+
+        # ── 3. SIGMA DETECTIONS (with evidence) ──
+        sigma_hits = summary.get("sigma_hits") or []
+        if sigma_hits:
+            row = write_section(row, "SIGMA RULE DETECTIONS")
+            row = write_headers(row, ["Level", "Rule", "MITRE Technique", "Events", "Description"])
+            for h in sigma_hits:
+                lvl = (h.get("level") or "low").lower()
+                ws.write_string(row, 0, lvl.upper(), level_fmts.get(lvl, text_fmt))
+                ws.write_string(row, 1, h.get("title", ""), text_fmt)
+                ws.write_string(row, 2, h.get("mitre_technique", ""), text_fmt)
+                ws.write_string(row, 3, str(h.get("matched_rows", 0)), text_fmt)
+                ws.write_string(row, 4, h.get("description", ""), text_fmt)
+                row += 1
+                # Evidence rows
+                evidence = h.get("sample_evidence") or []
+                if evidence:
+                    ev_cols = [c for c in evidence[0].keys() if c != "_id"][:5]
+                    ws.write_string(row, 0, f"  Evidence ({len(evidence)} samples):", subsection_fmt)
+                    row += 1
+                    row = write_headers(row, ev_cols)
+                    for ev in evidence[:10]:
+                        for ci, c in enumerate(ev_cols):
+                            ws.write_string(row, ci, str(ev.get(c, ""))[:200], text_fmt)
+                        row += 1
+            row += 1
+
+        # ── 4. YARA DETECTIONS ──
+        yara_hits = summary.get("yara_hits") or []
+        if yara_hits:
+            row = write_section(row, "YARA DETECTIONS")
+            row = write_headers(row, ["Rule", "Category", "Tags", "Strings Matched"])
+            for y in yara_hits:
+                ws.write_string(row, 0, y.get("rule", ""), text_fmt)
+                ws.write_string(row, 1, y.get("namespace", ""), text_fmt)
+                ws.write_string(row, 2, ", ".join(y.get("tags", [])), text_fmt)
+                ws.write_string(row, 3, str(y.get("strings_matched", 0)), text_fmt)
+                row += 1
+            row += 1
+
+        # ── 5. MITRE KILL CHAIN ──
+        mitre = summary.get("mitre_kill_chain") or []
+        if mitre:
+            row = write_section(row, "MITRE ATT&CK KILL CHAIN")
+            row = write_headers(row, ["Tactic", "Threat Level", "Count", "Description"])
+            for m in mitre:
+                ws.write_string(row, 0, m.get("tactic", ""), text_fmt)
+                ws.write_string(row, 1, m.get("threat_level", ""), text_fmt)
+                ws.write_string(row, 2, str(m.get("count", 0)), text_fmt)
+                ws.write_string(row, 3, m.get("description", ""), text_fmt)
+                row += 1
+            row += 1
+
+        # ── 6. CROSS-SOURCE CORRELATION ──
+        corr = summary.get("cross_source_correlation") or {}
+        chains = corr.get("chains") if isinstance(corr, dict) else []
+        if chains:
+            row = write_section(row, "CROSS-SOURCE CORRELATION")
+            row = write_headers(row, ["Pivot Type", "Entity", "Events", "First Seen", "Last Seen"])
+            for c in chains:
+                ws.write_string(row, 0, c.get("pivot_type", ""), text_fmt)
+                ws.write_string(row, 1, c.get("entity", ""), text_fmt)
+                ws.write_string(row, 2, str(c.get("total_events", 0)), text_fmt)
+                ws.write_string(row, 3, c.get("first_seen", ""), text_fmt)
+                ws.write_string(row, 4, c.get("last_seen", ""), text_fmt)
+                row += 1
+            row += 1
+
+        # ── 7. SESSION PROFILES ──
+        sessions = summary.get("session_profiles") or []
+        if sessions:
+            row = write_section(row, "SESSION PROFILES")
+            row = write_headers(row, ["IP / Identity", "Requests", "Dwell Time", "Unique Paths", "User Agent"])
+            for sp in sessions:
+                ws.write_string(row, 0, sp.get("ip") or sp.get("identity", ""), text_fmt)
+                ws.write_string(row, 1, str(sp.get("requests", 0)), text_fmt)
+                ws.write_string(row, 2, sp.get("dwell", ""), text_fmt)
+                ws.write_string(row, 3, str(sp.get("unique_paths", 0)), text_fmt)
+                ws.write_string(row, 4, str(sp.get("user_agent", ""))[:100], text_fmt)
+                row += 1
+            row += 1
+
+        # ── 8. RISK JUSTIFICATION ──
+        risk_justify = summary.get("risk_justify")
+        if risk_justify:
+            row = write_section(row, "RISK JUSTIFICATION")
+            justify_list = risk_justify if isinstance(risk_justify, list) else [risk_justify]
+            for j in justify_list:
+                ws.write_string(row, 0, f"• {j}", text_fmt)
+                row += 1
+
+        workbook.close()
+        return JSONResponse(content={"download_url": f"/download/{out_filename}", "filename": out_filename})
+
+    except Exception as e:
+        logger.error(f"Forensic summary XLSX error: {e}")
+        import traceback
+        traceback.print_exc()
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
 
 @app.post("/api/export/pdf")
 async def export_pdf(request: ExportRequest, background_tasks: BackgroundTasks):
@@ -1420,7 +1998,7 @@ async def export_split_zip(request: ExportRequest, background_tasks: BackgroundT
 
         # Final Formatting
         lf = normalize_time_columns_in_df(lf)
-        
+
         # Prepare schemas and column renaming
         all_cols_split = lf.collect_schema().names()
         id_col_name = "No."
@@ -1451,21 +2029,21 @@ async def export_split_zip(request: ExportRequest, background_tasks: BackgroundT
         base_name = request.original_filename or request.filename
         if not base_name: base_name = "data"
         base_name = sanitize_filename(base_name)
-        
+
         zip_base = f"Split_{os.path.splitext(base_name)[0]}"
         zip_filename = f"{zip_base}_{int(time.time())}.zip"
         zip_path = os.path.join(OUTPUT_DIR, zip_filename)
-        
+
         # Determine chunk size (Bytes)
         user_chunk_mb = request.chunk_size_mb or 99
         user_chunk_mb = max(10, min(500, user_chunk_mb))
         CHUNK_SIZE_BYTES = user_chunk_mb * 1024 * 1024
-        
+
         # Row-based streaming loop
-        batch_size = 10000 
+        batch_size = 10000
         offset = 0
         total_rows = lf.select(pl.len()).collect().item()
-        
+
         use_json = (getattr(request, 'zip_format', 'csv') or 'csv').lower() == 'json'
         ext = "json" if use_json else "csv"
 
@@ -1516,6 +2094,125 @@ async def export_split_zip(request: ExportRequest, background_tasks: BackgroundT
         logger.error(f"Split ZIP Export failed: {e}")
         traceback.print_exc()
         return JSONResponse(content={"error": str(e)}, status_code=500)
+
+# =============================================================================
+# YARA SCANNING — On-demand scan of ingested data against YARA rules
+# =============================================================================
+_yara_rules_compiled = None
+
+def _load_yara_rules():
+    """Compile all YARA rules from rules/yara/ at first use."""
+    global _yara_rules_compiled
+    if _yara_rules_compiled is not None:
+        return _yara_rules_compiled
+    try:
+        import yara
+        rules_dir = os.path.join(os.path.dirname(__file__), "rules", "yara")
+        if not os.path.isdir(rules_dir):
+            return None
+        rule_files = {}
+        for root, _, files in os.walk(rules_dir):
+            for f in files:
+                if f.endswith(".yar"):
+                    ns = os.path.splitext(f)[0]
+                    rule_files[ns] = os.path.join(root, f)
+        if rule_files:
+            _yara_rules_compiled = yara.compile(filepaths=rule_files)
+            logger.info(f"YARA: compiled {len(rule_files)} rule files")
+        return _yara_rules_compiled
+    except ImportError:
+        logger.debug("yara-python not installed — YARA scanning disabled")
+        return None
+    except Exception as e:
+        logger.warning(f"YARA compilation error: {e}")
+        return None
+
+@app.post("/api/yara_scan/{filename}")
+async def yara_scan(filename: str):
+    """Scan ingested CSV text content against compiled YARA rules."""
+    import asyncio
+    rules = _load_yara_rules()
+    if rules is None:
+        return JSONResponse(content={"error": "YARA rules not available"}, status_code=501)
+    csv_path = os.path.join(OUTPUT_DIR, filename)
+    if not os.path.exists(csv_path):
+        return JSONResponse(content={"error": "File not found"}, status_code=404)
+    try:
+        def _scan():
+            with open(csv_path, "r", errors="replace") as f:
+                text = f.read(5 * 1024 * 1024)  # Scan first 5MB
+            matches = rules.match(data=text)
+            return [{
+                "rule": m.rule,
+                "namespace": m.namespace,
+                "tags": list(m.tags),
+                "strings_matched": len(m.strings),
+            } for m in matches]
+        results = await asyncio.to_thread(_scan)
+        return {"filename": filename, "yara_matches": results, "total_matches": len(results)}
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+# =============================================================================
+# FORENSIC DOC PROCESSOR — PDF IOC extraction & XLSX integrity check
+# =============================================================================
+@app.post("/api/document/extract_iocs")
+async def extract_iocs_from_document(file: UploadFile = File(...)):
+    """Upload a PDF and extract IOCs (IPs, hashes, domains, URLs)."""
+    import asyncio
+    _skills_dir = os.path.join(os.path.dirname(__file__), ".agents", "skills", "chronos_forensic_doc_processor")
+    if _skills_dir not in sys.path:
+        sys.path.insert(0, _skills_dir)
+    from forensic_doc_processor import extract_pdf_text, extract_iocs_from_pdf_text
+
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext != ".pdf":
+        return JSONResponse(content={"error": "Only PDF files supported"}, status_code=400)
+    tmp_path = os.path.join(UPLOAD_DIR, f"ioc_scan_{file.filename}")
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(await file.read())
+        def _extract():
+            result = extract_pdf_text(tmp_path)
+            if result["status"] != "ok":
+                return result
+            full_text = " ".join(p["text"] for p in result["pages"])
+            iocs = extract_iocs_from_pdf_text(full_text)
+            return {
+                "status": "ok",
+                "filename": file.filename,
+                "total_pages": result["total_pages"],
+                "total_chars": result["total_chars"],
+                "iocs": iocs,
+                "ioc_count": sum(len(v) for v in iocs.values()),
+            }
+        return await asyncio.to_thread(_extract)
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+@app.post("/api/document/check_xlsx")
+async def check_xlsx_endpoint(file: UploadFile = File(...)):
+    """Upload an XLSX and verify forensic integrity (empty cols, hex truncation)."""
+    import asyncio
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".agents", "skills", "chronos_forensic_doc_processor"))
+    from forensic_doc_processor import check_xlsx_integrity
+
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in (".xlsx", ".xls"):
+        return JSONResponse(content={"error": "Only XLSX/XLS files supported"}, status_code=400)
+    tmp_path = os.path.join(UPLOAD_DIR, f"check_{file.filename}")
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(await file.read())
+        result = await asyncio.to_thread(check_xlsx_integrity, tmp_path)
+        result["filename"] = file.filename
+        return result
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
 
 if __name__ == "__main__":
     import uvicorn

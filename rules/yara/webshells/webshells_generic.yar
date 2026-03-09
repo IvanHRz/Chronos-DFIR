@@ -82,8 +82,8 @@ rule Webshell_ASPX_Generic {
         $convert_base64 = "Convert.FromBase64String" ascii
     condition:
         $aspx1 and
-        ($process_start or ($exec_cmd1 or $exec_cmd2 or $exec_cmd3)) and
-        any of ($request_params, $request_form, $request_query)
+        ($process_start or $cmd_process or ($exec_cmd1 or $exec_cmd2 or $exec_cmd3)) and
+        any of ($request_params, $request_form, $request_query, $convert_base64)
 }
 
 rule Webshell_JSP_Generic {
@@ -106,5 +106,6 @@ rule Webshell_JSP_Generic {
     condition:
         $jsp and
         ($runtime_exec or $process_builder) and
-        $request_param
+        $request_param and
+        ($cmd or $sh or $bash or $base64)
 }
