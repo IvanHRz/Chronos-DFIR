@@ -16,7 +16,7 @@ from engine.forensic import (
     sub_analyze_timeline, sub_analyze_context, sub_analyze_hunting,
     sub_analyze_identity_and_procs, ingest_json_file
 )
-from timeline_skill import generate_unified_timeline
+# generate_unified_timeline runs in subprocess — see forensic processing in upload handler
 import polars as pl
 import csv
 import sys
@@ -99,6 +99,14 @@ async def hard_reset():
 from engine.case_router import case_router
 app.include_router(case_router)
 
+# Mount Settings Router
+from engine.settings_router import settings_router
+app.include_router(settings_router)
+
+# Mount Enrichment Router (grid-integrated bulk enrichment)
+from engine.enrichment_router import enrichment_router
+app.include_router(enrichment_router)
+
 @app.on_event("startup")
 async def startup_event():
     # Initialize Case Database
@@ -116,12 +124,65 @@ UPLOAD_DIR = os.path.join(BASE_DIR, "chronos_uploads")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
 
-# Global Cache
-processed_files = {}
+# Global Cache with TTL (4 hours)
+import time as _time
+
+class _TTLDict(dict):
+    """Dictionary with per-entry TTL to prevent memory leaks."""
+    def __init__(self, default_ttl=14400):
+        super().__init__()
+        self._ttl = default_ttl
+        self._timestamps = {}
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        self._timestamps[key] = _time.monotonic()
+
+    def __getitem__(self, key):
+        if key in self._timestamps and _time.monotonic() - self._timestamps[key] > self._ttl:
+            del self._timestamps[key]
+            dict.__delitem__(self, key)
+            raise KeyError(key)
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+processed_files = _TTLDict(default_ttl=14400)
 
 # Ensure directories exist
 for d in [OUTPUT_DIR, UPLOAD_DIR, STATIC_DIR, TEMPLATES_DIR]:
     os.makedirs(d, exist_ok=True)
+
+
+async def _process_file_subprocess(file_path: str, ext: str, dest_path: str) -> tuple:
+    """Process uploaded file in a separate Python process to isolate Polars crashes from uvicorn."""
+    script = (
+        f'import sys, os; sys.path.insert(0, {BASE_DIR!r}); '
+        f'from engine.ingestor import ingest_file, normalize_and_save; '
+        f'lf, df, cat = ingest_file({file_path!r}, {ext!r}); '
+        f'rc = normalize_and_save(lf, df, {dest_path!r}); '
+        f'print(f"{{rc}}|{{cat}}")'
+    )
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, '-c', script,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=BASE_DIR
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        err_msg = stderr.decode()[-500:] if stderr else "Unknown error"
+        raise RuntimeError(f"Subprocess exit code {proc.returncode}: {err_msg}")
+    output = stdout.decode().strip()
+    parts = output.rsplit('|', 1)
+    rc = int(parts[0]) if parts[0].lstrip('-').isdigit() else -1
+    cat = parts[1] if len(parts) > 1 else "generic"
+    return rc, cat
+
 
 # Mount statics and templates
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -169,7 +230,6 @@ async def process_file(
     case_id: Optional[str] = Form(None),
     phase_id: Optional[str] = Form(None),
 ):
-    from engine.ingestor import ingest_file, normalize_and_save
     try:
         file_path = os.path.join(UPLOAD_DIR, file.filename)
 
@@ -180,6 +240,8 @@ async def process_file(
             while chunk := file.file.read(8192):
                 sha256.update(chunk)
                 buffer.write(chunk)
+            buffer.flush()
+            os.fsync(buffer.fileno())
         file_hash = sha256.hexdigest()
         file_size = os.path.getsize(file_path)
         logger.info(f"Chain of Custody — {file.filename}: SHA256={file_hash}, Size={file_size}")
@@ -188,7 +250,7 @@ async def process_file(
 
         # LOGIC BRANCH: Generic Report vs Forensic Artifact
         generic_exts = ['.csv', '.xlsx', '.tsv', '.parquet', '.json', '.jsonl', '.ndjson',
-                        '.db', '.sqlite', '.sqlite3', '.pslist', '.txt', '.log', '.plist', '.zip']
+                        '.db', '.sqlite', '.sqlite3', '.pslist', '.txt', '.log', '.trc', '.plist', '.zip']
         if ext in generic_exts:
             csv_filename = f"import_{file.filename.split('.')[0]}_{int(time.time())}.csv"
             dest_path = os.path.join(OUTPUT_DIR, csv_filename)
@@ -197,18 +259,15 @@ async def process_file(
             file_cat = "generic"
 
             try:
-                lf, df_eager, file_cat = ingest_file(file_path, ext)
-                rc = normalize_and_save(lf, df_eager, dest_path)
-                row_count = rc if rc >= 0 else "Unknown (Lazy)"
+                rc, file_cat = await _process_file_subprocess(file_path, ext, dest_path)
+                row_count = rc if rc >= 0 else "Unknown"
                 processed_files[file.filename] = csv_filename
 
-            except MemoryError:
-                logger.warning("OOM during normalization. Using raw file.")
-                shutil.copy(file_path, dest_path)
             except Exception as e:
-                logger.error(f"Parsing error, saving raw: {e}")
+                logger.error(f"Subprocess processing failed: {e}. Copying raw file.")
                 try:
                     shutil.copy(file_path, dest_path)
+                    processed_files[file.filename] = csv_filename
                 except Exception as copy_e:
                     logger.error(f"Raw copy FAILED: {copy_e}")
                 row_count = "Unknown"
@@ -246,8 +305,24 @@ async def process_file(
                 }
             }
 
-        # Forensic Processing (MFT/EVTX)
-        result_json = generate_unified_timeline(file_path, artifact_type, OUTPUT_DIR)
+        # Forensic Processing (MFT/EVTX) — run in subprocess to isolate Polars crashes
+        forensic_script = (
+            f'import sys, os, json; sys.path.insert(0, {BASE_DIR!r}); '
+            f'from timeline_skill import generate_unified_timeline; '
+            f'r = generate_unified_timeline({file_path!r}, {artifact_type!r}, {OUTPUT_DIR!r}); '
+            f'print(r)'
+        )
+        forensic_proc = await asyncio.create_subprocess_exec(
+            sys.executable, '-c', forensic_script,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=BASE_DIR
+        )
+        f_stdout, f_stderr = await forensic_proc.communicate()
+        if forensic_proc.returncode != 0:
+            err = f_stderr.decode()[-500:] if f_stderr else "Unknown"
+            return JSONResponse(content={"error": f"Forensic processing failed: {err}"}, status_code=500)
+        result_json = f_stdout.decode().strip()
         result = json.loads(result_json)
 
         if result.get("status") != "success":
@@ -311,11 +386,11 @@ async def get_data(request: Request, filename: str, page: int = 1, size: int = 5
             return JSONResponse(content={"error": "File not found"}, status_code=404)
 
         try:
-            lf = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=0)
+            lf = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=0, truncate_ragged_lines=True)
             try:
                 lf.collect().head(1)
             except:
-                lf = pl.scan_csv(csv_path, encoding='utf8-lossy', ignore_errors=True, infer_schema_length=0)
+                lf = pl.scan_csv(csv_path, encoding='utf8-lossy', ignore_errors=True, infer_schema_length=0, truncate_ragged_lines=True)
         except Exception as scan_err:
              logger.error(f"Error scanning csv {csv_path}: {scan_err}")
              return JSONResponse(content={"error": str(scan_err)}, status_code=500)
@@ -424,10 +499,10 @@ async def get_empty_columns(filename: str, query: Optional[str] = None, start_ti
 
         # Scan to get lazy frame
         try:
-            lf = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=0)
+            lf = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=0, truncate_ragged_lines=True)
             lf.collect().head(1)
         except:
-            lf = pl.scan_csv(csv_path, encoding='utf8-lossy', ignore_errors=True, infer_schema_length=0)
+            lf = pl.scan_csv(csv_path, encoding='utf8-lossy', ignore_errors=True, infer_schema_length=0, truncate_ragged_lines=True)
 
         schema = lf.collect_schema()
         all_cols = schema.names()
@@ -502,11 +577,11 @@ async def get_histogram(filename: str, exclude_id: str = None, start_time: str =
         # Lazy Load Logic
         log_step("Starting Lazy Load Logic")
         try:
-            df = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=0)
+            df = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=0, truncate_ragged_lines=True)
             df.collect().head(1)  # Test if it works
             log_step("scan_csv (strict) succeeded")
         except:
-            df = pl.scan_csv(csv_path, encoding='utf8-lossy', ignore_errors=True, infer_schema_length=0)
+            df = pl.scan_csv(csv_path, encoding='utf8-lossy', ignore_errors=True, infer_schema_length=0, truncate_ragged_lines=True)
             log_step("scan_csv (lossy) succeeded")
 
         log_step("collecting schema")
@@ -565,7 +640,7 @@ async def get_timeseries(filename: str):
         if not os.path.exists(csv_path):
             return JSONResponse(content={"error": "File not found"}, status_code=404)
 
-        lf = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=10000)
+        lf = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=10000, truncate_ragged_lines=True)
         time_col = get_primary_time_column(lf.collect_schema().names())
 
         # Import and run the timeseries builder skill
@@ -595,9 +670,9 @@ async def get_histogram_subset(req: SubsetRequest):
 
         # Load CSV
         try:
-            lf = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=0)
+            lf = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=0, truncate_ragged_lines=True)
         except:
-            lf = pl.scan_csv(csv_path, encoding='utf8-lossy', ignore_errors=True, infer_schema_length=0)
+            lf = pl.scan_csv(csv_path, encoding='utf8-lossy', ignore_errors=True, infer_schema_length=0, truncate_ragged_lines=True)
 
         schema = lf.collect_schema()
 
@@ -676,12 +751,18 @@ class ExportRequest(BaseModel):
     start_time: Optional[str] = ""
     end_time: Optional[str] = ""
     ai_optimized: bool = False
-    visible_columns: list[str] = []
+    visible_columns: list = []  # Accept Any to avoid null validation errors
     original_filename: str = ""
     sort_col: Optional[str] = None
     sort_dir: Optional[str] = None
     chunk_size_mb: Optional[int] = 99
     zip_format: Optional[str] = "csv"  # "csv" or "json"
+
+    def model_post_init(self, __context):
+        # Sanitize visible_columns: remove null/empty entries
+        if self.visible_columns:
+            object.__setattr__(self, 'visible_columns',
+                               [c for c in self.visible_columns if c and isinstance(c, str)])
 
 class ReportRequest(BaseModel):
     filename: str
@@ -717,11 +798,12 @@ async def forensic_report(request: ReportRequest):
         if not os.path.exists(csv_path):
             return JSONResponse(content={"error": "File not found"}, status_code=404)
 
-        lf = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=0)
+        lf = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=0, truncate_ragged_lines=True)
 
-        # Assign stable row IDs if they don't exist (needed by _apply_standard_processing)
-        schema_names = lf.collect_schema().names()
-        if "_id" not in schema_names:
+        # Assign stable row IDs — drop existing _id first to avoid collision
+        try:
+            lf = lf.drop("_id").with_row_index(name="_id", offset=1)
+        except Exception:
             lf = lf.with_row_index(name="_id", offset=1)
 
         # Apply Unified Processing
@@ -796,6 +878,7 @@ async def forensic_report(request: ReportRequest):
         session_result = []
         exec_artifacts_result = {}
         yara_hits_result = []
+        hunting_result = {}
         for i, r in enumerate(results):
             if isinstance(r, Exception):
                 if i == 4:
@@ -808,6 +891,9 @@ async def forensic_report(request: ReportRequest):
                     formatted_results.append(f"### Error in Analysis ###\n{str(r)}")
             elif i == 4:
                 sigma_hits_result = r if isinstance(r, list) else []
+                # Sort by severity: critical first
+                _SEV = {"critical": 0, "high": 1, "medium": 2, "low": 3, "informational": 4}
+                sigma_hits_result.sort(key=lambda h: _SEV.get(h.get("level", "").lower(), 99))
             elif i == 5:
                 correlation_result = r if isinstance(r, dict) else {}
             elif i == 6:
@@ -816,6 +902,9 @@ async def forensic_report(request: ReportRequest):
                 exec_artifacts_result = r if isinstance(r, dict) else {}
             elif i == 8:
                 yara_hits_result = r if isinstance(r, list) else []
+            elif i == 2:
+                hunting_result = r if isinstance(r, dict) else {}
+                formatted_results.append(r)
             else:
                 formatted_results.append(r)
 
@@ -824,28 +913,48 @@ async def forensic_report(request: ReportRequest):
         mitre_kill_chain = map_mitre_from_sigma(sigma_hits_result)
 
         # --- THREAT INTELLIGENCE ENRICHMENT (non-blocking, post-pipeline) ---
+        # Free providers (ip_api, urlhaus, circl, internetdb, threatfox_free) run
+        # with zero API keys. Keyed providers added when keys are configured.
         enrichment_result = {}
         try:
-            from engine.enrichment import deduplicate_iocs, enrich_all_iocs, load_api_keys
+            from engine.enrichment import deduplicate_iocs, enrich_all_iocs, load_api_keys, extract_hashes_from_sigma
             api_keys = load_api_keys()
-            if any(api_keys.values()):
-                # Extract context_data from Task 1 results
-                context_data = {}
-                for r in formatted_results:
-                    if isinstance(r, dict) and r.get("type") == "context":
-                        context_data = r
-                        break
-                iocs = deduplicate_iocs(context_data, session_result, correlation_result)
-                if any(iocs.values()):
-                    enrichment_result = await asyncio.wait_for(
-                        enrich_all_iocs(iocs, api_keys),
-                        timeout=30.0
-                    )
-                    logger.info(f"Enrichment: {enrichment_result.get('total_enriched', 0)} IOCs enriched via {len(enrichment_result.get('providers_used', []))} providers")
+            # Extract context_data from Task 1 results
+            context_data = {}
+            for r in formatted_results:
+                if isinstance(r, dict) and r.get("type") == "context":
+                    context_data = r
+                    break
+            iocs = deduplicate_iocs(context_data, session_result, correlation_result, hunt_data=hunting_result)
+            # DETECT-02: Extract hashes from Sigma-matched rows
+            sigma_hashes = extract_hashes_from_sigma(sigma_hits_result)
+            iocs["hashes"] = iocs.get("hashes", set()) | sigma_hashes
+            if any(iocs.values()):
+                enrichment_result = await asyncio.wait_for(
+                    enrich_all_iocs(iocs, api_keys),
+                    timeout=30.0
+                )
+                logger.info(f"Enrichment: {enrichment_result.get('total_enriched', 0)} IOCs enriched via {len(enrichment_result.get('providers_used', []))} providers")
         except asyncio.TimeoutError:
             logger.warning("Enrichment timed out after 30s, returning partial results")
         except Exception as e:
             logger.debug(f"Enrichment phase skipped: {e}")
+
+        # ENRICH-01: IOC coverage report
+        _total_iocs = sum(len(v) for v in iocs.values()) if 'iocs' in dir() else 0
+        _enriched = enrichment_result.get("total_enriched", 0)
+        enrichment_coverage = {
+            "total_iocs": _total_iocs,
+            "analyzed": _enriched,
+            "pending": max(0, _total_iocs - _enriched),
+            "by_type": {},
+            "providers_used": enrichment_result.get("providers_used", []),
+        }
+        if 'iocs' in dir():
+            for ioc_type, enrich_key in [("ips", "ip_enrichment"), ("domains", "domain_enrichment"), ("hashes", "hash_enrichment"), ("emails", "email_enrichment")]:
+                found = len(iocs.get(ioc_type, set()))
+                enriched = len(enrichment_result.get(enrich_key, []))
+                enrichment_coverage["by_type"][ioc_type] = {"found": found, "enriched": enriched, "pending": max(0, found - enriched)}
 
         end_p = time.perf_counter()
         logger.info(f"Forensic Report generated in {end_p - start_p:.2f}s for {df.height} records | Sigma hits: {len(sigma_hits_result)} | YARA hits: {len(yara_hits_result)} | Correlations: {correlation_result.get('total_correlated', 0)} | Sessions: {len(session_result)} | Artifacts: {len(exec_artifacts_result.get('artifact_types_detected', []))}")
@@ -950,13 +1059,16 @@ async def forensic_report(request: ReportRequest):
             "risk_score": risk_score,
             "risk_justify": risk_justify,
             "eps": eps,
-            "sigma_hits": sigma_hits_result,
+            "sigma_hits": sigma_hits_result[:60],
+            "sigma_total": len(sigma_hits_result),
+            "sigma_truncated": len(sigma_hits_result) > 60,
             "mitre_kill_chain": mitre_kill_chain,
             "cross_source_correlation": correlation_result,
             "session_profiles": session_result,
             "execution_artifacts": exec_artifacts_result,
             "yara_hits": yara_hits_result,
             "threat_intelligence": enrichment_result,
+            "enrichment_coverage": enrichment_coverage,
         }
 
 
@@ -1021,10 +1133,10 @@ async def export_filtered(request: ExportRequest, background_tasks: BackgroundTa
             return JSONResponse(content={"error": "Source file not found"}, status_code=404)
 
         try:
-            lf = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=0)
+            lf = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=0, truncate_ragged_lines=True)
             lf.collect().head(1)
         except:
-            lf = pl.scan_csv(csv_path, encoding='utf8-lossy', ignore_errors=True, infer_schema_length=0)
+            lf = pl.scan_csv(csv_path, encoding='utf8-lossy', ignore_errors=True, infer_schema_length=0, truncate_ragged_lines=True)
 
         # Assign stable row IDs BEFORE filtering if they don't exist
         schema = lf.collect_schema()
@@ -1264,9 +1376,21 @@ async def export_filtered(request: ExportRequest, background_tasks: BackgroundTa
             worksheet.autofit()
             workbook.close()
 
+        # Compute SHA256 of the exported file for integrity verification
+        import hashlib
+        _sha256 = hashlib.sha256()
+        with open(out_path, "rb") as _hf:
+            for chunk in iter(lambda: _hf.read(8192), b""):
+                _sha256.update(chunk)
+        file_hash = _sha256.hexdigest()
+
         # Do NOT delete the file here. The frontend expects a JSON with download_url,
         # and the `/download/{filename}` route handles deleting the file after serving it.
-        return JSONResponse(content={"download_url": f"/download/{out_filename}", "filename": out_filename})
+        return JSONResponse(content={
+            "download_url": f"/download/{out_filename}",
+            "filename": out_filename,
+            "sha256": file_hash,
+        })
 
 
     except Exception as e:
@@ -1291,10 +1415,10 @@ async def export_html(request: ExportRequest, background_tasks: BackgroundTasks)
             return JSONResponse(content={"error": "Source file not found"}, status_code=404)
 
         try:
-            lf = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=0)
+            lf = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=0, truncate_ragged_lines=True)
             lf.collect().head(1)
         except:
-            lf = pl.scan_csv(csv_path, encoding='utf8-lossy', ignore_errors=True, infer_schema_length=0)
+            lf = pl.scan_csv(csv_path, encoding='utf8-lossy', ignore_errors=True, infer_schema_length=0, truncate_ragged_lines=True)
 
         # Apply Filters (Same as export_filtered)
         schema = lf.collect_schema()
@@ -1476,6 +1600,31 @@ async def export_html(request: ExportRequest, background_tasks: BackgroundTasks)
                 top_tactic_report = f"Win EventID {top_tactic_report}"
 
         import json
+
+        # --- Enrichment phase for export parity ---
+        export_enrichment = {}
+        export_coverage = {"total_iocs": 0, "analyzed": 0, "pending": 0, "by_type": {}, "providers_used": []}
+        try:
+            from engine.enrichment import deduplicate_iocs, enrich_all_iocs, load_api_keys, extract_hashes_from_sigma
+            _api_keys = load_api_keys()
+            _iocs = deduplicate_iocs(context_data, hunt_data=hunting_data)
+            _sigma_hashes = extract_hashes_from_sigma(_sigma_hits_html)
+            _iocs["hashes"] = _iocs.get("hashes", set()) | _sigma_hashes
+            if any(_iocs.values()):
+                export_enrichment = await asyncio.wait_for(
+                    enrich_all_iocs(_iocs, _api_keys), timeout=30.0
+                )
+                _total = sum(len(v) for v in _iocs.values())
+                _enriched = export_enrichment.get("total_enriched", 0)
+                export_coverage = {
+                    "total_iocs": _total, "analyzed": _enriched,
+                    "pending": max(0, _total - _enriched),
+                    "by_type": {t: {"found": len(_iocs.get(t, set())), "enriched": len(export_enrichment.get(f"{t[:-1]}_enrichment" if t.endswith("s") else f"{t}_enrichment", []))} for t in ["ips", "domains", "hashes"]},
+                    "providers_used": export_enrichment.get("providers_used", []),
+                }
+        except Exception as _enr_e:
+            logger.debug(f"Export enrichment skipped: {_enr_e}")
+
         # Render Template
         rendered_html = templates.get_template("static_report.html").render(
             timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1494,7 +1643,10 @@ async def export_html(request: ExportRequest, background_tasks: BackgroundTasks)
             context_data_json=json.dumps(context_data),
             hunting_data_json=json.dumps(hunting_data),
             threat_actors_json=json.dumps(threat_actors),
-            sigma_hits_json=json.dumps(_sigma_hits_html),
+            sigma_hits_json=json.dumps(_sigma_hits_html[:60]),
+            sigma_truncation_note=f"Showing top 60 of {len(_sigma_hits_html)} total detections. Export as JSON/CSV for complete dataset." if len(_sigma_hits_html) > 60 else "",
+            enrichment_json=json.dumps(export_enrichment),
+            enrichment_coverage_json=json.dumps(export_coverage),
         )
 
         # Save to temp file
@@ -1957,10 +2109,10 @@ async def export_split_zip(request: ExportRequest, background_tasks: BackgroundT
             return JSONResponse(content={"error": "Source file not found"}, status_code=404)
 
         try:
-            lf = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=0)
+            lf = pl.scan_csv(csv_path, ignore_errors=True, infer_schema_length=0, truncate_ragged_lines=True)
             lf.collect().head(1)
         except:
-            lf = pl.scan_csv(csv_path, encoding='utf8-lossy', ignore_errors=True, infer_schema_length=0)
+            lf = pl.scan_csv(csv_path, encoding='utf8-lossy', ignore_errors=True, infer_schema_length=0, truncate_ragged_lines=True)
 
         # Assign stable row IDs BEFORE filtering if they don't exist
         if "_id" not in lf.collect_schema().names():
@@ -2206,6 +2358,5 @@ if __name__ == "__main__":
         "app:app",
         host="0.0.0.0",
         port=8000,
-        reload=True,
-        reload_dirs=["static", "templates", "engine", ".agents/skills"]
+        reload=False,
     )

@@ -134,6 +134,19 @@ class EnrichmentCache:
             finally:
                 conn.close()
 
+    def clear_all(self) -> int:
+        """Remove all cache entries. Returns count of deleted rows."""
+        with self._lock:
+            conn = self._connect()
+            try:
+                cursor = conn.execute("DELETE FROM ioc_cache")
+                conn.commit()
+                deleted = cursor.rowcount
+                logger.info(f"Cache cleared: {deleted} entries removed")
+                return deleted
+            finally:
+                conn.close()
+
     def stats(self) -> dict:
         """Return cache statistics."""
         with self._lock:

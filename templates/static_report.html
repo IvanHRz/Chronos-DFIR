@@ -483,22 +483,25 @@
             margin-bottom: 25px;
         }
 
-        .chart-doughnut-wrapper {
+        .chart-doughnut-wrapper,
+        .chart-bar-wrapper,
+        .chart-stacked-wrapper {
             position: relative;
-            height: 280px;
             width: 100%;
+            border-radius: 8px;
+            padding: 12px;
+        }
+
+        .chart-doughnut-wrapper {
+            height: 280px;
         }
 
         .chart-bar-wrapper {
-            position: relative;
             height: 300px;
-            width: 100%;
         }
 
         .chart-stacked-wrapper {
-            position: relative;
             height: 340px;
-            width: 100%;
         }
 
         @media (max-width: 768px) {
@@ -508,11 +511,20 @@
             }
         }
 
+        /* ── Enrichment cards ──────────────────────────────────────────── */
+        .enrich-card {
+            background: rgba(0,0,0,0.2);
+        }
+        .enrich-card-ip { color: #60a5fa; }
+        .enrich-card-details { color: #94a3b8; }
+        .enrich-card-value { color: #e2e8f0; }
+
         /* ── Print / PDF styles ──────────────────────────────────────────── */
         @media print {
             body { background: #fff !important; color: #000 !important; padding: 10px; }
             .dashboard-header h1 { -webkit-text-fill-color: #1e3a8a !important; }
             .kpi-grid, .chart-row { break-inside: avoid; }
+            .chart-doughnut-wrapper, .chart-bar-wrapper, .chart-stacked-wrapper { background: #ffffff !important; }
             .kpi-card { background: #f1f5f9 !important; border: 1px solid #cbd5e1 !important; color: #000 !important; }
             .kpi-card .val { color: #1e3a8a !important; }
             .kpi-card.risk-Critical .val { color: #dc2626 !important; }
@@ -592,6 +604,12 @@
             .kpi-card div[style*="background: rgba"] div { color: #1e293b !important; }
             .chart-analytics-row, .chart-distribution-row { break-inside: avoid; }
             .chart-full-row { break-inside: avoid; }
+            /* Enrichment cards for print */
+            .enrich-card { background: #f1f5f9 !important; border: 1px solid #e2e8f0 !important; }
+            .enrich-card-ip { color: #1d4ed8 !important; }
+            .enrich-card-details { color: #475569 !important; }
+            .enrich-card-value { color: #1e293b !important; }
+            .report-section h3[style*="color:#60a5fa"] { color: #1d4ed8 !important; }
         }
     </style>
 </head>
@@ -765,6 +783,43 @@
         const HUNTING_DATA = {{ hunting_data_json | default ('null') | safe }};
         const THREAT_ACTORS = {{ threat_actors_json | default ('null') | safe }};
         const SIGMA_HITS = {{ sigma_hits_json | default ('[]') | safe }};
+        const ENRICHMENT_DATA = {{ enrichment_json | default ('{}') | safe }};
+        const ENRICHMENT_COVERAGE = {{ enrichment_coverage_json | default ('{}') | safe }};
+        const SIGMA_TRUNCATION = "{{ sigma_truncation_note | default('') }}";
+
+        // Dual color palettes: dark theme (screen) and print theme (PDF)
+        const P_DARK = { tick: '#aaa', label: '#ccc', grid: 'rgba(255,255,255,0.08)', title: '#e2e8f0' };
+        const P_PRINT = { tick: '#334155', label: '#1e293b', grid: 'rgba(0,0,0,0.12)', title: '#0f172a' };
+        let P = P_DARK;
+
+        // Global chart registry for beforeprint re-rendering
+        const _allCharts = [];
+
+        function _switchChartColors(palette) {
+            P = palette;
+            _allCharts.forEach(chart => {
+                if (!chart || !chart.options) return;
+                const o = chart.options;
+                // Update scales
+                if (o.scales) {
+                    Object.values(o.scales).forEach(s => {
+                        if (s.ticks) s.ticks.color = palette.label;
+                        if (s.grid) s.grid.color = palette.grid;
+                    });
+                    if (o.scales.x && o.scales.x.ticks) o.scales.x.ticks.color = palette.tick;
+                }
+                // Update title/subtitle
+                if (o.plugins) {
+                    if (o.plugins.title) o.plugins.title.color = palette.title;
+                    if (o.plugins.subtitle) o.plugins.subtitle.color = palette.tick;
+                    if (o.plugins.legend && o.plugins.legend.labels) o.plugins.legend.labels.color = palette.label;
+                }
+                chart.update('none');
+            });
+        }
+
+        window.addEventListener('beforeprint', () => _switchChartColors(P_PRINT));
+        window.addEventListener('afterprint', () => _switchChartColors(P_DARK));
 
         // Populate Top Lists
         function populateList(elementId, data) {
@@ -1033,7 +1088,7 @@
                         if (!el) return;
                         const labels = items.map(x => { const v = keyFn(x); return v.length > 22 ? v.slice(-22) : v; });
                         const data = items.map(x => x.count);
-                        new Chart(el.getContext('2d'), {
+                        _allCharts.push(new Chart(el.getContext('2d'), {
                             type: 'bar',
                             data: {
                                 labels,
@@ -1043,13 +1098,13 @@
                                 indexAxis: 'y',
                                 responsive: true,
                                 maintainAspectRatio: false,
-                                plugins: { legend: { display: true, labels: { color: '#94a3b8', font: { size: 10 } } }, tooltip: { backgroundColor: 'rgba(15,23,42,0.9)', bodyColor: '#cbd5e1' } },
+                                plugins: { legend: { display: true, labels: { color: P.label, font: { size: 10 } } }, tooltip: { mode: 'index' } },
                                 scales: {
-                                    x: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: 'rgba(51,65,85,0.4)' } },
-                                    y: { ticks: { color: '#cbd5e1', font: { size: 10 } }, grid: { display: false } }
+                                    x: { ticks: { color: P.tick, font: { size: 9 } }, grid: { color: P.grid } },
+                                    y: { ticks: { color: P.label, font: { size: 10 } }, grid: { display: false } }
                                 }
                             }
-                        });
+                        }));
                     };
 
                     if (users.length > 0) mkBarH('fallback-users', 'Top Users', users, u => u.id, '#34d399');
@@ -1078,24 +1133,30 @@
                 },
                 scales: {
                     x: {
-                        ticks: { color: "#94a3b8", maxRotation: 45, minRotation: 45 },
-                        grid: { color: "rgba(51, 65, 85, 0.5)", drawBorder: false }
+                        ticks: { color: P.tick, maxRotation: 45, minRotation: 45 },
+                        grid: { color: P.grid, drawBorder: false }
                     },
                     y: {
                         type: useLog ? 'logarithmic' : 'linear',
                         beginAtZero: !useLog,
                         min: useLog ? 1 : undefined,
                         ticks: {
-                            color: "#94a3b8",
+                            color: P.tick,
                             callback: useLog ? (v) => Number.isInteger(Math.log10(v)) ? v.toLocaleString() : null : undefined
                         },
-                        grid: { color: "rgba(51, 65, 85, 0.5)", drawBorder: false }
+                        grid: { color: P.grid, drawBorder: false }
                     }
                 },
                 plugins: {
+                    title: {
+                        display: true,
+                        text: 'Event Timeline',
+                        color: P.title,
+                        font: { size: 16, weight: 'bold' }
+                    },
                     legend: {
                         display: CHART_DATA.datasets.length > 1,
-                        labels: { color: "#f8fafc", usePointStyle: true, boxWidth: 6 }
+                        labels: { color: P.label, usePointStyle: true, boxWidth: 6 }
                     },
                     tooltip: {
                         backgroundColor: 'rgba(15, 23, 42, 0.9)',
@@ -1145,14 +1206,14 @@
                 }
             }
 
-            new Chart(ctx, {
+            _allCharts.push(new Chart(ctx, {
                 type: CHART_DATA.datasets && CHART_DATA.datasets.length > 0 ? (CHART_DATA.datasets[0].type || 'bar') : 'bar',
                 data: {
                     labels: CHART_DATA.labels || [],
                     datasets: CHART_DATA.datasets || []
                 },
                 options: chartOptions
-            });
+            }));
         }
 
         // ============================================================
@@ -1169,6 +1230,15 @@
 
             const DOUGHNUT_PALETTE = ['#3b82f6', '#06b6d4', '#8b5cf6', '#f97316', '#22c55e', '#ec4899', '#eab308', '#14b8a6', '#ef4444', '#64748b'];
 
+            // Helper: extract labels/values from new format or legacy dict
+            function extractDistData(d) {
+                if (Array.isArray(d.labels)) return { labels: d.labels, values: d.values };
+                const sorted = Object.entries(d)
+                    .filter(([k]) => !['total','unique_count','coverage_pct','labels','values'].includes(k))
+                    .sort((a, b) => b[1] - a[1]).slice(0, 10);
+                return { labels: sorted.map(([k]) => k), values: sorted.map(([,v]) => v) };
+            }
+
             const chartDefaults = {
                 responsive: true,
                 maintainAspectRatio: false,
@@ -1176,7 +1246,7 @@
                     legend: {
                         position: 'right',
                         labels: {
-                            color: '#cbd5e1',
+                            color: P.label,
                             font: { size: 11 },
                             padding: 10,
                             usePointStyle: true,
@@ -1224,82 +1294,116 @@
             };
 
             // ── 1. Event Categories Doughnut ──
-            if (dist.categories && typeof dist.categories === 'object' && Object.keys(dist.categories).length > 0) {
-                const sorted = Object.entries(dist.categories).sort((a, b) => b[1] - a[1]);
-                const labels = sorted.map(e => e[0]);
-                const values = sorted.map(e => e[1]);
-                const colors = labels.map((_, i) => DOUGHNUT_PALETTE[i % DOUGHNUT_PALETTE.length]);
-
-                new Chart(document.getElementById('categoriesDoughnut').getContext('2d'), {
-                    type: 'doughnut',
-                    data: {
-                        labels: labels,
-                        datasets: [{
-                            data: values,
-                            backgroundColor: colors,
-                            borderColor: '#1e293b',
-                            borderWidth: 2,
-                            hoverBorderColor: '#f8fafc',
-                            hoverBorderWidth: 2
-                        }]
-                    },
-                    options: {
-                        ...chartDefaults,
-                        cutout: '55%',
-                        animation: { animateRotate: true, duration: 600 }
-                    }
-                });
-                hasAnyChart = true;
+            if (dist.categories && typeof dist.categories === 'object') {
+                const { labels, values } = extractDistData(dist.categories);
+                if (labels.length >= 2) {
+                    const colors = labels.map((_, i) => DOUGHNUT_PALETTE[i % DOUGHNUT_PALETTE.length]);
+                    const catTitle = dist.category_column || 'Event Categories';
+                    _allCharts.push(new Chart(document.getElementById('categoriesDoughnut').getContext('2d'), {
+                        type: 'doughnut',
+                        data: {
+                            labels: labels,
+                            datasets: [{ data: values, backgroundColor: colors, borderColor: '#1e293b', borderWidth: 1 }]
+                        },
+                        options: {
+                            ...chartDefaults,
+                            cutout: '55%',
+                            animation: { animateRotate: true, duration: 600 },
+                            plugins: {
+                                ...chartDefaults.plugins,
+                                title: { display: true, text: catTitle, color: P.title, font: { size: 14, weight: 'bold' } }
+                            }
+                        }
+                    }));
+                    hasAnyChart = true;
+                } else {
+                    const catPanel = document.getElementById('categoriesDoughnut')?.closest('.panel');
+                    if (catPanel) catPanel.style.display = 'none';
+                }
             } else {
                 const catPanel = document.getElementById('categoriesDoughnut')?.closest('.panel');
                 if (catPanel) catPanel.style.display = 'none';
             }
 
             // ── 2. Source Distribution Doughnut ──
-            if (dist.sources && typeof dist.sources === 'object' && Object.keys(dist.sources).length > 0) {
-                const sorted = Object.entries(dist.sources).sort((a, b) => b[1] - a[1]);
-                const labels = sorted.map(e => e[0]);
-                const values = sorted.map(e => e[1]);
-                const colors = labels.map((_, i) => DOUGHNUT_PALETTE[i % DOUGHNUT_PALETTE.length]);
-
-                new Chart(document.getElementById('sourcesDoughnut').getContext('2d'), {
-                    type: 'doughnut',
-                    data: {
-                        labels: labels,
-                        datasets: [{
-                            data: values,
-                            backgroundColor: colors,
-                            borderColor: '#1e293b',
-                            borderWidth: 2,
-                            hoverBorderColor: '#f8fafc',
-                            hoverBorderWidth: 2
-                        }]
-                    },
-                    options: {
-                        ...chartDefaults,
-                        cutout: '55%',
-                        animation: { animateRotate: true, duration: 600 }
-                    }
-                });
-                hasAnyChart = true;
+            if (dist.sources && typeof dist.sources === 'object') {
+                const { labels, values } = extractDistData(dist.sources);
+                if (labels.length >= 2) {
+                    const colors = labels.map((_, i) => DOUGHNUT_PALETTE[i % DOUGHNUT_PALETTE.length]);
+                    const srcTitle = dist.source_column || 'Sources';
+                    _allCharts.push(new Chart(document.getElementById('sourcesDoughnut').getContext('2d'), {
+                        type: 'doughnut',
+                        data: {
+                            labels: labels,
+                            datasets: [{ data: values, backgroundColor: colors, borderColor: '#1e293b', borderWidth: 1 }]
+                        },
+                        options: {
+                            ...chartDefaults,
+                            cutout: '55%',
+                            animation: { animateRotate: true, duration: 600 },
+                            plugins: {
+                                ...chartDefaults.plugins,
+                                title: { display: true, text: srcTitle, color: P.title, font: { size: 14, weight: 'bold' } }
+                            }
+                        }
+                    }));
+                    hasAnyChart = true;
+                } else {
+                    const srcPanel = document.getElementById('sourcesDoughnut')?.closest('.panel');
+                    if (srcPanel) srcPanel.style.display = 'none';
+                }
             } else {
                 const srcPanel = document.getElementById('sourcesDoughnut')?.closest('.panel');
                 if (srcPanel) srcPanel.style.display = 'none';
             }
 
-            // ── 3. Top Event IDs Horizontal Bar ──
-            if (dist.top_events && dist.top_events.labels && dist.top_events.labels.length > 0) {
-                const labels = dist.top_events.labels;
-                const values = dist.top_events.values;
-                const barColors = labels.map((_, i) => {
-                    const ratio = labels.length > 1 ? i / (labels.length - 1) : 0;
-                    const r = Math.round(59 + (20 - 59) * ratio);
-                    const g = Math.round(130 + (184 - 130) * ratio);
-                    const b = Math.round(246 + (166 - 246) * ratio);
-                    return `rgba(${r}, ${g}, ${b}, 0.85)`;
+            // ── Helper: render print-friendly horizontal bar ──
+            function renderPrintBar(canvasId, distData, title) {
+                if (!distData || !distData.labels || !distData.labels.length) {
+                    const panel = document.getElementById(canvasId)?.closest('.panel');
+                    if (panel) panel.style.display = 'none';
+                    return false;
+                }
+                const labels = distData.labels;
+                const values = distData.values;
+                const total = values.reduce((a, b) => a + b, 0);
+                // Color coding: dominant bars get warm colors
+                const barColors = values.map(v => {
+                    const ratio = total > 0 ? v / total : 0;
+                    if (ratio > 0.5) return 'rgba(239, 68, 68, 0.85)';
+                    if (ratio > 0.25) return 'rgba(245, 158, 11, 0.85)';
+                    return 'rgba(59, 130, 246, 0.85)';
                 });
+                const uniqueCount = distData.unique_count || labels.length;
+                const coverage = distData.coverage_pct || 0;
+                const subtitle = `Top ${labels.length} of ${uniqueCount} unique${coverage > 0 ? ' · ' + coverage + '% coverage' : ''}`;
 
-                new Chart(document.getElementById('topEventsBar').getContext('2d'), {
+                // Value labels plugin (GoAccess style)
+                const barValueLabels = {
+                    id: 'barValueLabels',
+                    afterDatasetsDraw(chart) {
+                        const { ctx } = chart;
+                        chart.data.datasets.forEach((ds, dsIdx) => {
+                            const meta = chart.getDatasetMeta(dsIdx);
+                            meta.data.forEach((bar, i) => {
+                                const val = ds.data[i];
+                                const pct = total > 0 ? ((val / total) * 100).toFixed(1) : '0';
+                                const lbl = val >= 1000 ? `${(val/1000).toFixed(1)}k (${pct}%)` : `${val.toLocaleString()} (${pct}%)`;
+                                ctx.save();
+                                ctx.fillStyle = P.title;
+                                ctx.font = '10px Inter, sans-serif';
+                                ctx.textAlign = 'left';
+                                ctx.textBaseline = 'middle';
+                                if (bar.x + 6 < chart.chartArea.right - 10) {
+                                    ctx.fillText(lbl, bar.x + 6, bar.y);
+                                }
+                                ctx.restore();
+                            });
+                        });
+                    }
+                };
+
+                _allCharts.push(new Chart(document.getElementById(canvasId).getContext('2d'), {
                     type: 'bar',
                     data: {
                         labels: labels,
@@ -1310,113 +1414,59 @@
                             borderColor: barColors.map(c => c.replace('0.85', '1')),
                             borderWidth: 1,
                             borderRadius: 4,
-                            borderSkipped: false
+                            barPercentage: 0.8
                         }]
                     },
+                    plugins: [barValueLabels],
                     options: {
                         indexAxis: 'y',
                         responsive: true,
                         maintainAspectRatio: false,
                         plugins: {
+                            title: { display: true, text: title, color: P.title, font: { size: 14, weight: 'bold' }, padding: { bottom: 2 } },
+                            subtitle: { display: true, text: subtitle, color: P.tick, font: { size: 11, style: 'italic' }, padding: { bottom: 6 } },
                             legend: { display: false },
                             tooltip: {
-                                backgroundColor: 'rgba(15, 23, 42, 0.95)',
-                                titleColor: '#f8fafc',
-                                bodyColor: '#cbd5e1',
-                                borderColor: '#334155',
-                                borderWidth: 1,
-                                padding: 10
+                                callbacks: {
+                                    label: function(ctx) {
+                                        const pct = total > 0 ? ((ctx.raw / total) * 100).toFixed(1) : '0';
+                                        return `${ctx.raw.toLocaleString()} events (${pct}%)`;
+                                    }
+                                }
                             }
                         },
                         scales: {
                             x: {
-                                ticks: { color: '#94a3b8', font: { size: 10 } },
-                                grid: { color: 'rgba(51, 65, 85, 0.4)' }
+                                ticks: { color: P.tick, font: { size: 10 } },
+                                grid: { color: P.grid }
                             },
                             y: {
                                 ticks: {
-                                    color: '#cbd5e1',
+                                    color: P.label,
                                     font: { size: 11 },
                                     callback: function(val) {
                                         const label = this.getLabelForValue(val);
-                                        return label.length > 30 ? label.substring(0, 27) + '...' : label;
+                                        return label.length > 35 ? label.substring(0, 32) + '...' : label;
                                     }
                                 },
                                 grid: { display: false }
                             }
                         }
                     }
-                });
+                }));
+                return true;
+            }
+
+            // ── 3. Top Event IDs Horizontal Bar ──
+            const eventsTitle = (dist.top_events && dist.top_events.chart_title) || 'Top Event IDs';
+            if (renderPrintBar('topEventsBar', dist.top_events, eventsTitle)) {
                 hasAnyChart = true;
-            } else {
-                const evtPanel = document.getElementById('topEventsBar')?.closest('.panel');
-                if (evtPanel) evtPanel.style.display = 'none';
             }
 
             // ── 4. Top Processes Horizontal Bar ──
-            if (dist.top_processes && dist.top_processes.labels && dist.top_processes.labels.length > 0) {
-                const labels = dist.top_processes.labels;
-                const values = dist.top_processes.values;
-                const barColors = labels.map((_, i) => {
-                    const ratio = labels.length > 1 ? i / (labels.length - 1) : 0;
-                    const r = Math.round(59 + (20 - 59) * ratio);
-                    const g = Math.round(130 + (184 - 130) * ratio);
-                    const b = Math.round(246 + (166 - 246) * ratio);
-                    return `rgba(${r}, ${g}, ${b}, 0.85)`;
-                });
-
-                new Chart(document.getElementById('topProcessesBar').getContext('2d'), {
-                    type: 'bar',
-                    data: {
-                        labels: labels,
-                        datasets: [{
-                            label: 'Count',
-                            data: values,
-                            backgroundColor: barColors,
-                            borderColor: barColors.map(c => c.replace('0.85', '1')),
-                            borderWidth: 1,
-                            borderRadius: 4,
-                            borderSkipped: false
-                        }]
-                    },
-                    options: {
-                        indexAxis: 'y',
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: {
-                            legend: { display: false },
-                            tooltip: {
-                                backgroundColor: 'rgba(15, 23, 42, 0.95)',
-                                titleColor: '#f8fafc',
-                                bodyColor: '#cbd5e1',
-                                borderColor: '#334155',
-                                borderWidth: 1,
-                                padding: 10
-                            }
-                        },
-                        scales: {
-                            x: {
-                                ticks: { color: '#94a3b8', font: { size: 10 } },
-                                grid: { color: 'rgba(51, 65, 85, 0.4)' }
-                            },
-                            y: {
-                                ticks: {
-                                    color: '#cbd5e1',
-                                    font: { size: 11 },
-                                    callback: function(val) {
-                                        const label = this.getLabelForValue(val);
-                                        return label.length > 30 ? label.substring(0, 27) + '...' : label;
-                                    }
-                                },
-                                grid: { display: false }
-                            }
-                        }
-                    }
-                });
+            const procTitle = (dist.top_processes && dist.top_processes.chart_title) || 'Top Processes';
+            if (renderPrintBar('topProcessesBar', dist.top_processes, procTitle)) {
                 hasAnyChart = true;
-            } else {
-                const procPanel = document.getElementById('topProcessesBar')?.closest('.panel');
-                if (procPanel) procPanel.style.display = 'none';
             }
 
             // ── 5. Severity Over Time Stacked Bar ──
@@ -1445,7 +1495,7 @@
                 }
 
                 if (datasets.length > 0) {
-                    new Chart(document.getElementById('severityStackedBar').getContext('2d'), {
+                    _allCharts.push(new Chart(document.getElementById('severityStackedBar').getContext('2d'), {
                         type: 'bar',
                         data: {
                             labels: dist.severity_over_time.labels,
@@ -1455,11 +1505,12 @@
                             responsive: true,
                             maintainAspectRatio: false,
                             plugins: {
+                                title: { display: true, text: 'Severity Over Time', color: P.title, font: { size: 14, weight: 'bold' } },
                                 legend: {
                                     display: true,
                                     position: 'top',
                                     labels: {
-                                        color: '#cbd5e1',
+                                        color: P.label,
                                         font: { size: 11 },
                                         usePointStyle: true,
                                         pointStyleWidth: 10,
@@ -1468,30 +1519,24 @@
                                 },
                                 tooltip: {
                                     mode: 'index',
-                                    intersect: false,
-                                    backgroundColor: 'rgba(15, 23, 42, 0.95)',
-                                    titleColor: '#f8fafc',
-                                    bodyColor: '#cbd5e1',
-                                    borderColor: '#334155',
-                                    borderWidth: 1,
-                                    padding: 10
+                                    intersect: false
                                 }
                             },
                             scales: {
                                 x: {
                                     stacked: true,
-                                    ticks: { color: '#94a3b8', maxRotation: 45, minRotation: 45, font: { size: 10 } },
-                                    grid: { color: 'rgba(51, 65, 85, 0.4)' }
+                                    ticks: { color: P.tick, maxRotation: 45, minRotation: 45, font: { size: 10 } },
+                                    grid: { color: P.grid }
                                 },
                                 y: {
                                     stacked: true,
                                     beginAtZero: true,
-                                    ticks: { color: '#94a3b8', font: { size: 10 } },
-                                    grid: { color: 'rgba(51, 65, 85, 0.4)' }
+                                    ticks: { color: P.tick, font: { size: 10 } },
+                                    grid: { color: P.grid }
                                 }
                             }
                         }
-                    });
+                    }));
                     hasAnyChart = true;
                 } else {
                     const sevPanel = document.getElementById('severityStackedBar')?.closest('.panel');
@@ -1640,8 +1685,88 @@
                 }
                 sh += '</div>';
             });
+            if (SIGMA_TRUNCATION) {
+                sh += `<div style="font-size:0.75rem; color:#94a3b8; margin-top:8px; font-style:italic;">${escapeHtml(SIGMA_TRUNCATION)}</div>`;
+            }
             document.getElementById('sigma-detections-content').innerHTML = sh;
             document.getElementById('sigma-container').style.display = 'block';
+        }
+
+        // --- THREAT INTELLIGENCE ENRICHMENT SECTION ---
+        if (ENRICHMENT_DATA && ENRICHMENT_DATA.total_enriched > 0) {
+            const ti = ENRICHMENT_DATA;
+            const cov = ENRICHMENT_COVERAGE || {};
+            let eh = '';
+
+            // Coverage badges
+            if (cov.analyzed > 0) {
+                eh += `<div style="display:flex; gap:10px; margin-bottom:12px; flex-wrap:wrap;">
+                    <span style="background:#166534; color:#4ade80; padding:3px 10px; border-radius:4px; font-size:0.8rem; font-weight:700;">ANALYZED: ${cov.analyzed}</span>
+                    ${cov.pending > 0 ? `<span style="background:#713f12; color:#fbbf24; padding:3px 10px; border-radius:4px; font-size:0.8rem; font-weight:700;">PENDING: ${cov.pending}</span>` : ''}
+                    <span style="font-size:0.7rem; color:#94a3b8;">Providers: ${(ti.providers_used || []).join(', ')}</span>
+                </div>`;
+            }
+
+            // IP enrichment cards
+            if (ti.ip_enrichment && ti.ip_enrichment.length > 0) {
+                eh += '<div style="font-weight:700; color:#60a5fa; margin-bottom:8px; font-size:0.85rem;">IP ADDRESSES</div>';
+                eh += '<div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:8px; margin-bottom:15px;">';
+                ti.ip_enrichment.forEach(ip => {
+                    const geo = ip.geo || {};
+                    const abuse = ip.abuse || {};
+                    const vt = ip.vt || {};
+                    const abuseScore = abuse.abuse_confidence || 0;
+                    const borderCol = abuseScore > 75 ? '#ef4444' : abuseScore > 25 ? '#f59e0b' : '#4ade80';
+                    const vtCol = (vt.malicious || 0) > 5 ? '#ef4444' : (vt.malicious || 0) > 0 ? '#f59e0b' : '#4ade80';
+                    eh += `<div class="enrich-card" style="border-radius:6px; padding:10px; border-left:3px solid ${borderCol};">
+                        <div style="font-family:monospace; font-size:0.9rem; margin-bottom:4px;" class="enrich-card-ip">${escapeHtml(ip.ip)}</div>
+                        <div style="font-size:0.75rem; line-height:1.6;" class="enrich-card-details">
+                            ${geo.isp ? `<div>ISP: <span class="enrich-card-value">${escapeHtml(geo.isp)}</span></div>` : ''}
+                            ${geo.country_code ? `<div>Location: <span class="enrich-card-value">${escapeHtml(geo.city || '')} ${escapeHtml(geo.country_code)}</span></div>` : ''}
+                            ${abuse.abuse_confidence !== undefined ? `<div>Abuse: <span style="font-weight:700; color:${borderCol};">${abuseScore}%</span></div>` : ''}
+                            ${vt.malicious !== undefined ? `<div>VT: <span style="font-weight:700; color:${vtCol};">${vt.malicious} malicious</span> / ${vt.harmless || 0} clean</div>` : ''}
+                        </div>
+                    </div>`;
+                });
+                eh += '</div>';
+            }
+
+            // Domain enrichment
+            if (ti.domain_enrichment && ti.domain_enrichment.length > 0) {
+                eh += '<div style="font-weight:700; color:#60a5fa; margin-bottom:8px; font-size:0.85rem;">DOMAINS</div>';
+                eh += '<div style="display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:8px; margin-bottom:15px;">';
+                ti.domain_enrichment.forEach(d => {
+                    eh += `<div style="background:rgba(0,0,0,0.2); border-radius:6px; padding:10px; border-left:3px solid #60a5fa;">
+                        <div style="font-family:monospace; color:#60a5fa;">${escapeHtml(d.domain || '')}</div>
+                    </div>`;
+                });
+                eh += '</div>';
+            }
+
+            // Hash enrichment
+            if (ti.hash_enrichment && ti.hash_enrichment.length > 0) {
+                eh += '<div style="font-weight:700; color:#60a5fa; margin-bottom:8px; font-size:0.85rem;">FILE HASHES</div>';
+                eh += '<div style="display:grid; grid-template-columns:1fr; gap:8px; margin-bottom:15px;">';
+                ti.hash_enrichment.forEach(h => {
+                    const vt = h.vt || {};
+                    const vtCol = (vt.malicious || 0) > 5 ? '#ef4444' : (vt.malicious || 0) > 0 ? '#f59e0b' : '#4ade80';
+                    eh += `<div style="background:rgba(0,0,0,0.2); border-radius:6px; padding:10px; border-left:3px solid ${vtCol};">
+                        <span style="font-family:monospace; font-size:0.8rem; color:#60a5fa;">${escapeHtml(h.hash || '')}</span>
+                        ${vt.malicious !== undefined ? `<span style="margin-left:12px; font-weight:700; color:${vtCol};">VT: ${vt.malicious} malicious</span>` : ''}
+                    </div>`;
+                });
+                eh += '</div>';
+            }
+
+            // Insert into page — find or create container
+            const sigmaContainer = document.getElementById('sigma-container');
+            if (sigmaContainer) {
+                const enrichDiv = document.createElement('div');
+                enrichDiv.className = 'report-section';
+                enrichDiv.style.cssText = 'margin-top:30px; page-break-inside:avoid;';
+                enrichDiv.innerHTML = `<h3 style="color:#60a5fa; border-bottom:2px solid rgba(96,165,250,0.3); padding-bottom:8px; margin-bottom:15px; text-transform:uppercase; letter-spacing:0.5px;">THREAT INTELLIGENCE ENRICHMENT (${ti.total_enriched} IOCs)</h3>${eh}`;
+                sigmaContainer.parentNode.insertBefore(enrichDiv, sigmaContainer.nextSibling);
+            }
         }
 
     </script>

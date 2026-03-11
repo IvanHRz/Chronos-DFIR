@@ -575,6 +575,36 @@ SKILL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "priority": "low",
         "could_implement": "AI prompt skill, no backend code needed",
     },
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # QA / DIAGNOSTICS — Always-active testing & validation skills
+    # ═══════════════════════════════════════════════════════════════════════
+
+    "chronos_chart_diagnostics": {
+        "status": ACTIVE, "skill_number": None,
+        "module": "engine.analyzer",
+        "description": "Chart QA — Validates chart visibility, cardinality, titles, and export rendering",
+        "implements": ["Smart fallback for low-cardinality columns", "Dynamic chart_title"],
+        "used_by": ["engine/analyzer.py:_compute_distributions"],
+    },
+    "chronos_export_testing": {
+        "status": ACTIVE, "skill_number": None,
+        "module": ".agents/skills/chronos_export_testing",
+        "description": "Export QA — 10 comprehensive export tests for PDF, HTML, CSV, XLSX, JSON",
+        "implements": ["Export validation checklists"],
+    },
+    "chronos_filter_diagnostics": {
+        "status": ACTIVE, "skill_number": None,
+        "module": ".agents/skills/chronos_filter_diagnostics",
+        "description": "Filter QA — Validates filter propagation, TTP updates, cache symptoms",
+        "implements": ["Filter + TTP diagnostic checklists"],
+    },
+    "chronos_polars_compat": {
+        "status": ACTIVE, "skill_number": None,
+        "module": ".agents/skills/chronos_polars_compat",
+        "description": "Polars API compat guard — prevents deprecated params in write_excel/write_json",
+        "implements": ["xlsxwriter-direct pattern for XLSX exports", "Deprecated param checklist"],
+    },
 }
 
 

@@ -1,15 +1,25 @@
-console.log("CHRONOS-CORE: Loading v189...");
-import { API } from './api.js?v=191';
-import { GridManager } from './grid.js?v=191';
-import { ChartManager } from './charts.js?v=191';
-import { ActionManager } from './actions.js?v=191';
-import ChronosState from './state.js?v=191';
-import events from './events.js?v=191';
+console.log("CHRONOS-CORE: Loading v202...");
+import { API } from './api.js?v=202';
+import { GridManager } from './grid.js?v=202';
+import { ChartManager } from './charts.js?v=202';
+import { ActionManager } from './actions.js?v=202';
+import { SettingsManager } from './settings.js?v=202';
+import { EnrichmentManager } from './enrichment.js?v=202';
+import ChronosState from './state.js?v=202';
+import events from './events.js?v=202';
 
 // Initialize Managers
-const grid = new GridManager('timeline-table');
-const charts = new ChartManager();
-const actions = new ActionManager(grid, charts);
+let grid, charts, actions, settings, enrichment;
+try {
+    grid = new GridManager('timeline-table');
+    charts = new ChartManager();
+    actions = new ActionManager(grid, charts);
+    settings = new SettingsManager();
+    enrichment = new EnrichmentManager(grid);
+    console.log("CHRONOS-CORE: All managers initialized OK");
+} catch (e) {
+    console.error("CHRONOS-CORE: Manager init FAILED:", e);
+}
 
 // Expose grid globally for actions to read columns and sorters
 window.grid = grid;
@@ -44,7 +54,7 @@ window._chronosViewSigmaInGrid = (rowIds) => {
 };
 
 document.addEventListener('DOMContentLoaded', () => {
-    console.log("Chronos-DFIR Modular Engine Initialized with State Management");
+    console.log("CHRONOS-CORE: DOMContentLoaded fired — wiring UI");
 
     // Initialize Plugins
     if (typeof flatpickr !== 'undefined') {
@@ -54,6 +64,8 @@ document.addEventListener('DOMContentLoaded', () => {
     charts.init('log-scale-toggle');
     setupEventListeners();
     setupStateObservers();
+    window.__chronosReady = true;
+    console.log("CHRONOS-CORE: UI ready ✓");
 });
 
 function setupStateObservers() {
@@ -199,6 +211,12 @@ function setupEventListeners() {
 
     // Hard Reset
     document.getElementById('hard-reset-btn')?.addEventListener('click', () => actions.hardReset());
+
+    // Settings Panel
+    document.getElementById('settings-btn')?.addEventListener('click', () => settings.toggle());
+
+    // Enrichment
+    document.getElementById('enrich-btn')?.addEventListener('click', () => enrichment.showProviderSelector());
 
     // ── Export Buttons (Direct — no dropdown) ──────────────────────────
     document.getElementById('download-csv')?.addEventListener('click', () => {
@@ -406,12 +424,15 @@ async function exportData(format) {
 }
 
 async function processArtifact() {
+    if (window._uploadInProgress) return;
+
     const fileInput = document.getElementById('fileElem');
     if (!fileInput.files[0]) {
         alert("Please select a file first clicking on 'Select File' or by Drag & Drop.");
         return;
     }
 
+    window._uploadInProgress = true;
     const file = fileInput.files[0];
     let artifactType = 'generic';
     const ext = file.name.split('.').pop().toLowerCase();
@@ -440,5 +461,9 @@ async function processArtifact() {
     } finally {
         processBtn.innerHTML = originalText;
         processBtn.disabled = false;
+        window._uploadInProgress = false;
     }
 }
+
+// Expose processArtifact globally as fallback
+window.processArtifact = processArtifact;

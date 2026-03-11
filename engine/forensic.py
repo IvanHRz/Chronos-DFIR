@@ -307,7 +307,7 @@ def sub_analyze_context(df: pl.DataFrame) -> dict:
     event_col = next((
         c for c in df_s.columns if c.lower() in [
             "wineventid", "eventid", "event_id", "eventsubid", "validated_eventid",
-            "id", "ruleid", "rule_id", "signatureid", "signature_id"
+            "ruleid", "rule_id", "signatureid", "signature_id"
         ]
     ), None)
     # Prefer Validated_EventID (integers only) if available — avoids synthetic labels like "macOS_Unified_Log"
@@ -846,7 +846,7 @@ def apply_hunter_logic(df: pl.DataFrame) -> dict:
     try:
         dst_col = next((c for c in df.columns if c.lower() in ["dst", "destinationip", "destination", "destip", "host"]), None)
         if dst_col:
-            clean_df = df.with_columns(pl.col(dst_col).cast(pl.Utf8, strict=False).str.replace_all(r"\[|\]|'", "").alias("Clean_Dst"))
+            clean_df = df.with_columns(pl.col(dst_col).cast(pl.Utf8, strict=False).str.replace_all(r"\[|\]|'", "").str.replace(r"^::ffff:", "").alias("Clean_Dst"))
             res["network"]["destinations"] = clean_df.filter(pl.col("Clean_Dst").is_not_null() & (pl.col("Clean_Dst") != "")).group_by("Clean_Dst").agg(pl.len().alias("count")).sort("count", descending=True).head(10).to_dicts()
 
         # Add Logon Event Detection from Skills
@@ -1822,6 +1822,9 @@ def generate_export_payloads(df: pl.DataFrame, yara_hits: list | None = None) ->
             from engine.sigma_engine import match_sigma_rules, load_sigma_rules
             sigma_rules = load_sigma_rules()
             sigma_hits = match_sigma_rules(df, sigma_rules)
+            # Sort by severity: critical → high → medium → low → informational
+            _SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "informational": 4}
+            sigma_hits.sort(key=lambda h: _SEV_ORDER.get(h.get("level", "").lower(), 99))
         except Exception as _se:
             logger.debug(f"Sigma engine skipped in generate_export_payloads: {_se}")
 

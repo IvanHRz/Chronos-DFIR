@@ -22,6 +22,8 @@ from engine.enrichment import (
     load_api_keys,
     get_active_providers,
     _is_public_ip,
+    _is_valid_domain,
+    _validate_ioc_for_provider,
 )
 
 
@@ -242,3 +244,82 @@ class TestAPIKeys:
         assert "abuseipdb" in active
         assert "virustotal" in active
         assert "urlscan" not in active
+
+
+# ── Domain Validation Tests (v198) ──────────────────────────────────────────
+
+class TestDomainValidation:
+    def test_rejects_exe_files(self):
+        assert _is_valid_domain("cmd.exe") is False
+        assert _is_valid_domain("svchost.exe") is False
+        assert _is_valid_domain("explorer.exe") is False
+        assert _is_valid_domain("backgroundtaskhost.exe") is False
+        assert _is_valid_domain("aeminstoreservice.exe") is False
+
+    def test_rejects_dll_files(self):
+        assert _is_valid_domain("kernel32.dll") is False
+        assert _is_valid_domain("ntdll.dll") is False
+
+    def test_rejects_other_file_extensions(self):
+        assert _is_valid_domain("config.xml") is False
+        assert _is_valid_domain("data.json") is False
+        assert _is_valid_domain("script.ps1") is False
+        assert _is_valid_domain("report.pdf") is False
+        assert _is_valid_domain("archive.zip") is False
+
+    def test_accepts_real_domains(self):
+        assert _is_valid_domain("evil.com") is True
+        assert _is_valid_domain("malware.ru") is True
+        assert _is_valid_domain("c2server.io") is True
+        assert _is_valid_domain("phishing.tk") is True
+        assert _is_valid_domain("dd.configurationcenter.com") is True
+        assert _is_valid_domain("host.configurationcenter.com") is True
+
+    def test_rejects_single_char_name(self):
+        assert _is_valid_domain("a.com") is False
+        assert _is_valid_domain("x.ru") is False
+
+    def test_accepts_two_char_name(self):
+        assert _is_valid_domain("go.com") is True
+        assert _is_valid_domain("ab.io") is True
+
+    def test_rejects_unknown_tlds(self):
+        assert _is_valid_domain("something.zzzzz") is False
+        assert _is_valid_domain("fake.notreal") is False
+
+    def test_rejects_non_matching_patterns(self):
+        assert _is_valid_domain("not a domain") is False
+        assert _is_valid_domain("192.168.1.1") is False
+        assert _is_valid_domain("") is False
+
+
+# ── Provider Compatibility Tests (v198) ─────────────────────────────────────
+
+class TestProviderCompatibility:
+    def test_circl_only_md5_sha1(self):
+        md5 = "d41d8cd98f00b204e9800998ecf8427e"  # 32 chars
+        sha1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"  # 40 chars
+        sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"  # 64 chars
+        assert _validate_ioc_for_provider(md5, "hash", "circl") is True
+        assert _validate_ioc_for_provider(sha1, "hash", "circl") is True
+        assert _validate_ioc_for_provider(sha256, "hash", "circl") is False
+
+    def test_virustotal_accepts_all_hashes(self):
+        md5 = "d41d8cd98f00b204e9800998ecf8427e"
+        sha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        assert _validate_ioc_for_provider(md5, "hash", "virustotal") is True
+        assert _validate_ioc_for_provider(sha256, "hash", "virustotal") is True
+
+    def test_domain_validation_in_provider(self):
+        assert _validate_ioc_for_provider("evil.com", "domain", "urlhaus") is True
+        assert _validate_ioc_for_provider("cmd.exe", "domain", "urlhaus") is False
+        assert _validate_ioc_for_provider("svchost.exe", "domain", "virustotal") is False
+
+    def test_ip_validation_public_only(self):
+        assert _validate_ioc_for_provider("8.8.8.8", "ip", "ip_api") is True
+        assert _validate_ioc_for_provider("192.168.1.1", "ip", "ip_api") is False
+        assert _validate_ioc_for_provider("10.0.0.1", "ip", "abuseipdb") is False
+
+    def test_email_validation(self):
+        assert _validate_ioc_for_provider("user@example.com", "email", "hibp") is True
+        assert _validate_ioc_for_provider("not-an-email", "email", "hibp") is False

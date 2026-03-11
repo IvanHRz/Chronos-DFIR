@@ -1,4 +1,5 @@
 import polars as pl
+import xlsxwriter
 import os
 import json
 from datetime import datetime
@@ -35,15 +36,23 @@ def generate_unified_timeline(source_path: str, artifact_type: str, output_dir: 
     # 3. Exportar CSV (Velocidad nativa Polars)
     df.write_csv(csv_path)
 
-    # 4. Exportar Excel (Polars nativo con xlsxwriter)
-    df.write_excel(
-        xlsx_path,
-        worksheet="Timeline",
-        autofit=True,
-        freeze_panes=(1, 0),
-        has_header=True,
-        autofilter=True,
-    )
+    # 4. Exportar Excel (xlsxwriter directo — Polars write_excel deprecated params)
+    with xlsxwriter.Workbook(str(xlsx_path)) as wb:
+        ws = wb.add_worksheet("Timeline")
+        header_fmt = wb.add_format({"bold": True, "bg_color": "#1a1a2e", "font_color": "#ffffff"})
+        text_fmt = wb.add_format({"num_format": "@"})
+
+        columns = df.columns
+        for col_idx, col_name in enumerate(columns):
+            ws.write(0, col_idx, col_name, header_fmt)
+
+        for row_idx, row in enumerate(df.iter_rows()):
+            for col_idx, val in enumerate(row):
+                ws.write_string(row_idx + 1, col_idx, str(val) if val is not None else "", text_fmt)
+
+        ws.freeze_panes(1, 0)
+        ws.autofilter(0, 0, len(df), len(columns) - 1)
+        ws.autofit()
 
     return json.dumps({
         "status": "success",

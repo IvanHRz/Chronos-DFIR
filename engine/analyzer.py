@@ -99,9 +99,21 @@ _CATEGORY_CANDIDATES = [
     "Category", "Title",
 ]
 
+# EventID column candidates (ordered by preference)
+_EVENTID_CANDIDATES = [
+    "EventID", "EventId", "Event_ID", "WinEventID", "eventid", "event_id",
+]
 
-def _compute_top_distribution(lf, col_name, top_n=10, filter_numeric=False, enrich_event_ids=False):
-    """Compute top-N distribution for a column. Returns {labels, values} or None."""
+# Process column candidates (ordered by preference)
+_PROCESS_CANDIDATES = [
+    "ProcessName", "Image", "Process", "NewProcessName", "ParentImage",
+    "SourceImage", "TargetImage", "Application",
+]
+
+
+def _compute_top_distribution(lf, col_name, top_n=10, filter_numeric=False,
+                              enrich_event_ids=False, total_rows=0):
+    """Compute top-N distribution for a column. Returns {labels, values, stats} or None."""
     try:
         schema_names = lf.collect_schema().names()
         if col_name not in schema_names:
@@ -111,45 +123,95 @@ def _compute_top_distribution(lf, col_name, top_n=10, filter_numeric=False, enri
               .filter(pl.col("_val").is_not_null() & (pl.col("_val").str.strip_chars() != ""))
               .group_by("_val").agg(pl.len().alias("count"))
               .sort("count", descending=True)
-              .head(top_n * 2)
+              .head(top_n * 3)
               .collect())
         if df.is_empty():
             return None
         labels, values = [], []
+        unique_total = len(df)
         for row in df.to_dicts():
             val = str(row["_val"]).strip()
             if val.lower() in _MEANINGLESS:
                 continue
             if filter_numeric and _PURE_NUMERIC.match(val):
                 continue
-            # Enrich Event IDs with human-readable descriptions
             if enrich_event_ids:
-                desc = _KNOWN_EVENT_IDS.get(val)
-                label = f"{val} — {desc}" if desc else val
+                # Normalize floats: "100.0" → "100", "4688.0" → "4688"
+                clean_val = val.split('.')[0] if '.' in val and val.replace('.', '').isdigit() else val
+                desc = _KNOWN_EVENT_IDS.get(clean_val)
+                label = f"{clean_val} — {desc}" if desc else clean_val
             else:
                 label = val if len(val) <= 50 else val[:47] + "..."
             labels.append(label)
             values.append(row["count"])
             if len(labels) >= top_n:
                 break
-        return {"labels": labels, "values": values} if labels else None
+        if not labels:
+            return None
+        shown_total = sum(values)
+        coverage = round(shown_total / total_rows * 100, 1) if total_rows > 0 else 0
+        return {
+            "labels": labels, "values": values,
+            "total": shown_total,
+            "coverage_pct": coverage,
+            "unique_count": unique_total
+        }
     except Exception as e:
         logger.warning(f"Top distribution for {col_name} failed: {e}")
         return None
 
 
-def _detect_columns(cols):
-    """Detect standard forensic columns. Returns dict of detected column names."""
+def _pick_best_column(lf, candidates, schema_names, min_unique=2, skip_mostly_numeric=False):
+    """Pick the candidate column with highest useful cardinality (>= min_unique).
+    If skip_mostly_numeric=True, reject columns where >80% of values are pure numbers (1-5 digits)."""
+    best_col, best_count = None, 0
+    for c in candidates:
+        if c not in schema_names:
+            continue
+        try:
+            col_df = (lf.select(pl.col(c).cast(pl.Utf8, strict=False))
+                      .filter(pl.col(c).is_not_null() & (pl.col(c).str.strip_chars() != ""))
+                      .collect())
+            unique_count = col_df[c].n_unique()
+            if unique_count < min_unique:
+                continue
+            if skip_mostly_numeric and len(col_df) > 0:
+                numeric_count = col_df.filter(
+                    pl.col(c).str.contains(r"^\d{1,5}$")
+                ).height
+                if numeric_count / len(col_df) > 0.8:
+                    continue
+            if unique_count > best_count:
+                best_col, best_count = c, unique_count
+        except Exception:
+            continue
+    return best_col
+
+
+def _detect_columns(cols, lf=None):
+    """Detect standard forensic columns. If lf provided, validates cardinality."""
     detected = {}
     detected["level"] = next((c for c in cols if c.lower() in [
         'level', 'severity', 'riskscore', 'risk']), None)
-    detected["eventid"] = next((c for c in cols if c.lower() in [
-        'eventid', 'event_id', 'wineventid']), None)
-    detected["process"] = next((c for c in cols if c.lower() in [
-        'processname', 'image', 'process', 'newprocessname', 'parentimage',
-        'sourceimage', 'targetimage', 'application']), None)
-    detected["category"] = next((c for c in cols if c in _CATEGORY_CANDIDATES), None)
-    detected["source"] = next((c for c in cols if c in _SOURCE_CANDIDATES), None)
+
+    if lf is not None:
+        schema_names = set(lf.collect_schema().names())
+        # Use cardinality-based selection for all multi-candidate columns
+        detected["eventid"] = _pick_best_column(lf, _EVENTID_CANDIDATES, schema_names, min_unique=1)
+        detected["process"] = _pick_best_column(lf, _PROCESS_CANDIDATES, schema_names, min_unique=1)
+        detected["category"] = _pick_best_column(lf, _CATEGORY_CANDIDATES, schema_names, min_unique=2)
+        detected["source"] = _pick_best_column(lf, _SOURCE_CANDIDATES, schema_names, min_unique=2)
+    else:
+        detected["eventid"] = next((c for c in cols if c.lower() in [
+            'eventid', 'event_id', 'wineventid']), None)
+        detected["process"] = next((c for c in cols if c.lower() in [
+            'processname', 'image', 'process', 'newprocessname', 'parentimage',
+            'sourceimage', 'targetimage', 'application']), None)
+        detected["category"] = next((c for c in cols if c in _CATEGORY_CANDIDATES), None)
+        detected["source"] = next((c for c in cols if c in _SOURCE_CANDIDATES), None)
+
+    # Log detected columns for debugging
+    logger.info(f"Detected chart columns: {detected}")
     return detected
 
 
@@ -162,7 +224,8 @@ def _compute_non_temporal(df_source, cols, detected):
     except Exception:
         total = 0
 
-    distributions = _compute_distributions(lf, cols, detected, labels=None, bucketed_df=None, bucket=None)
+    distributions = _compute_distributions(lf, cols, detected, labels=None, bucketed_df=None,
+                                           bucket=None, total_rows=total)
 
     return {
         "labels": [], "datasets": [],
@@ -173,7 +236,8 @@ def _compute_non_temporal(df_source, cols, detected):
     }
 
 
-def _compute_distributions(lf, cols, detected, labels=None, bucketed_df=None, bucket=None):
+def _compute_distributions(lf, cols, detected, labels=None, bucketed_df=None, bucket=None,
+                           total_rows=0):
     """Compute all distribution charts from a LazyFrame."""
     distributions = {}
     eventid_col = detected.get("eventid")
@@ -184,61 +248,82 @@ def _compute_distributions(lf, cols, detected, labels=None, bucketed_df=None, bu
 
     schema_names = lf.collect_schema().names()
 
-    # Category distribution (formerly "tactics" — now shows actual column data)
-    if category_col and category_col in schema_names:
+    # Get total rows for coverage stats
+    if total_rows <= 0:
         try:
-            cat_counts = lf.group_by(category_col).agg(pl.len().alias("count")).collect()
+            total_rows = lf.select(pl.len()).collect().item()
+        except Exception:
+            total_rows = 0
+
+    def _doughnut_distribution(col, key, column_key=None):
+        """Compute doughnut distribution with stats metadata."""
+        if not col or col not in schema_names:
+            return
+        try:
+            cat_counts = lf.group_by(col).agg(pl.len().alias("count")).collect()
             raw = dict(zip(
-                cat_counts[category_col].cast(pl.Utf8, strict=False).fill_null("N/A").to_list(),
+                cat_counts[col].cast(pl.Utf8, strict=False).fill_null("N/A").to_list(),
                 cat_counts["count"].to_list()
             ))
-            # Filter meaningless entries
             filtered = {k: v for k, v in raw.items() if k.lower().strip() not in _MEANINGLESS}
-            if filtered:
-                distributions["categories"] = filtered
-                distributions["category_column"] = category_col
-        except Exception as _ce:
-            logger.warning(f"Category distribution failed: {_ce}")
+            if not filtered or len(filtered) < 2:
+                return
+            # Sort and take top 10
+            sorted_items = sorted(filtered.items(), key=lambda x: x[1], reverse=True)[:10]
+            shown_total = sum(v for _, v in sorted_items)
+            distributions[key] = {
+                "labels": [k for k, _ in sorted_items],
+                "values": [v for _, v in sorted_items],
+                "total": shown_total,
+                "unique_count": len(filtered),
+                "coverage_pct": round(shown_total / total_rows * 100, 1) if total_rows > 0 else 0
+            }
+            if column_key:
+                distributions[column_key] = col
+        except Exception as e:
+            logger.warning(f"{key} distribution failed: {e}")
 
-    # Source distribution (Computer, Provider, User, etc.)
-    if source_col and source_col in schema_names:
-        try:
-            src_counts = lf.group_by(source_col).agg(pl.len().alias("count")).collect()
-            raw = dict(zip(
-                src_counts[source_col].cast(pl.Utf8, strict=False).fill_null("N/A").to_list(),
-                src_counts["count"].to_list()
-            ))
-            filtered = {k: v for k, v in raw.items() if k.lower().strip() not in _MEANINGLESS}
-            if filtered:
-                distributions["sources"] = filtered
-                distributions["source_column"] = source_col
-        except Exception as _se:
-            logger.warning(f"Source distribution failed: {_se}")
+    _doughnut_distribution(category_col, "categories", "category_column")
+    _doughnut_distribution(source_col, "sources", "source_column")
+    _doughnut_distribution(level_col, "severity")
 
-    # Severity distribution
-    if level_col and level_col in schema_names:
-        try:
-            sev_counts = lf.group_by(level_col).agg(pl.len().alias("count")).collect()
-            raw = dict(zip(
-                sev_counts[level_col].cast(pl.Utf8, strict=False).fill_null("N/A").to_list(),
-                sev_counts["count"].to_list()
-            ))
-            filtered = {k: v for k, v in raw.items() if k.lower().strip() not in _MEANINGLESS}
-            if filtered:
-                distributions["severity"] = filtered
-        except Exception:
-            pass
-
-    # Top EventIDs with enriched labels
+    # Top EventIDs with enriched labels — smart fallback for low cardinality
+    # Task is LAST because it often contains numeric category IDs (100, 101) not meaningful labels
+    _EVENT_FALLBACK_CANDIDATES = [
+        "Provider", "Channel", "Keywords", "Description", "Level", "Status",
+        "TargetUserName", "SubjectUserName", "LogonType", "User", "Computer",
+        "Opcode", "Task",
+    ]
     if eventid_col:
-        top_ev = _compute_top_distribution(lf, eventid_col, top_n=10, enrich_event_ids=True)
-        if top_ev:
+        ev_title = f"Top {eventid_col}"
+        top_ev = _compute_top_distribution(lf, eventid_col, top_n=10,
+                                           enrich_event_ids=True, total_rows=total_rows)
+        if top_ev and len(top_ev["labels"]) <= 2:
+            # Low cardinality EventID — find a more informative column
+            alt_col = _pick_best_column(lf, _EVENT_FALLBACK_CANDIDATES, schema_names, min_unique=3,
+                                       skip_mostly_numeric=True)
+            if alt_col:
+                alt_dist = _compute_top_distribution(lf, alt_col, top_n=10,
+                                                     filter_numeric=True, total_rows=total_rows)
+                if alt_dist and len(alt_dist["labels"]) >= 3:
+                    alt_dist["chart_title"] = f"Top {alt_col}"
+                    distributions["top_events"] = alt_dist
+                else:
+                    top_ev["chart_title"] = ev_title
+                    distributions["top_events"] = top_ev
+            else:
+                top_ev["chart_title"] = ev_title
+                distributions["top_events"] = top_ev
+        elif top_ev:
+            top_ev["chart_title"] = ev_title
             distributions["top_events"] = top_ev
 
     # Top Processes
     if proc_col:
-        top_proc = _compute_top_distribution(lf, proc_col, top_n=8, filter_numeric=True)
+        top_proc = _compute_top_distribution(lf, proc_col, top_n=8,
+                                             filter_numeric=True, total_rows=total_rows)
         if top_proc:
+            top_proc["chart_title"] = f"Top {proc_col}"
             distributions["top_processes"] = top_proc
 
     # Severity Over Time (stacked bar data) — only when timeline exists
@@ -270,7 +355,8 @@ def _compute_distributions(lf, cols, detected, labels=None, bucketed_df=None, bu
             if c.startswith("_") or c.lower() in {"no.", "no", "row_number"}:
                 continue
             if c in schema_names:
-                top = _compute_top_distribution(lf, c, top_n=10, filter_numeric=True)
+                top = _compute_top_distribution(lf, c, top_n=10, filter_numeric=True,
+                                                total_rows=total_rows)
                 if top and len(top["labels"]) >= 3:
                     distributions["top_generic"] = top
                     distributions["top_generic_column"] = c
@@ -297,8 +383,9 @@ def analyze_dataframe(df_source, target_bars=50, start_time: str = None, end_tim
         is_lazy = isinstance(df_source, pl.LazyFrame)
         cols = df_source.collect_schema().names() if is_lazy else df_source.columns
 
-        # Detect standard forensic columns
-        detected = _detect_columns(cols)
+        # Detect standard forensic columns (with cardinality check via LazyFrame)
+        base_lf = df_source if is_lazy else df_source.lazy()
+        detected = _detect_columns(cols, lf=base_lf)
 
         # 1. Parsing Time - Prioritized Search using Global Hierarchy
         existing_cols = set(cols)
@@ -469,7 +556,8 @@ def analyze_dataframe(df_source, target_bars=50, start_time: str = None, end_tim
         # All distributions via shared function
         distributions = _compute_distributions(
             q_filtered, cols, detected,
-            labels=labels, bucketed_df=bucketed_df, bucket=bucket
+            labels=labels, bucketed_df=bucketed_df, bucket=bucket,
+            total_rows=view_total
         )
 
         return {

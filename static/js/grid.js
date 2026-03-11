@@ -1,6 +1,6 @@
-import { API } from './api.js?v=191';
-import ChronosState from './state.js?v=191';
-import events from './events.js?v=191';
+import { API } from './api.js?v=202';
+import ChronosState from './state.js?v=202';
+import events from './events.js?v=202';
 
 export class GridManager {
     constructor(elementId) {
@@ -106,6 +106,10 @@ export class GridManager {
         }
 
         val = String(val);
+        // Strip Python list formatting: ['value1', 'value2'] → value1, value2
+        if (val.startsWith("[") && val.endsWith("]")) {
+            val = val.slice(1, -1).replace(/'/g, "").replace(/"/g, "").trim();
+        }
         val = val.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 
         const currentQuery = ChronosState.currentQuery;

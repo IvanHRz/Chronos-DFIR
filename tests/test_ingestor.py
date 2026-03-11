@@ -17,17 +17,16 @@ from engine.ingestor import (
 # ── CSV Round-trip ───────────────────────────────────────────────────
 
 def test_csv_ingest_basic():
-    """CSV file should produce a LazyFrame with correct schema."""
+    """CSV file should produce a DataFrame with correct schema (read_csv, no mmap)."""
     with tempfile.NamedTemporaryFile(suffix=".csv", mode="w", delete=False) as f:
         f.write("Time,EventID,Source\n2025-01-01 10:00:00,4624,WS01\n2025-01-02 11:00:00,4625,WS02\n")
         path = f.name
     try:
         lf, df_eager, cat = ingest_file(path, ".csv")
-        assert lf is not None, "CSV should produce LazyFrame"
-        assert df_eager is None
-        schema = lf.collect_schema()
-        assert "Time" in schema.names()
-        assert "EventID" in schema.names()
+        assert df_eager is not None, "CSV should produce DataFrame"
+        assert lf is None
+        assert "Time" in df_eager.columns
+        assert "EventID" in df_eager.columns
     finally:
         os.unlink(path)
 
@@ -86,13 +85,13 @@ def test_whitespace_csv_short_rows():
 # ── TSV ──────────────────────────────────────────────────────────────
 
 def test_tsv_ingest():
-    """TSV should produce a LazyFrame."""
+    """TSV should produce a DataFrame (read_csv, no mmap)."""
     with tempfile.NamedTemporaryFile(suffix=".tsv", mode="w", delete=False) as f:
         f.write("Time\tEventID\n2025-01-01\t100\n")
         path = f.name
     try:
         lf, df_eager, cat = ingest_file(path, ".tsv")
-        assert lf is not None
+        assert df_eager is not None
     finally:
         os.unlink(path)
 

@@ -1,6 +1,6 @@
 """
 Chronos-DFIR Ingestor — Multi-format file parsing engine.
-Extracts data from CSV, XLSX, JSON, SQLite, Plist, PSList, TXT/LOG, ZIP, TSV, Parquet.
+Extracts data from CSV, XLSX, JSON, SQLite, Plist, PSList, TXT/LOG, TRC, ZIP, TSV, Parquet.
 All output is Polars DataFrame or LazyFrame. Zero pandas dependency.
 """
 import os
@@ -104,20 +104,20 @@ def ingest_file(file_path: str, ext: str) -> tuple:
     elif ext == '.xlsx':
         df_eager = pl.read_excel(file_path)
 
-    elif ext in ['.pslist', '.txt', '.log']:
+    elif ext in ['.pslist', '.txt', '.log', '.trc']:
         df_eager, file_cat = _parse_text_file(file_path, ext)
 
     elif ext == '.zip':
-        df_eager, file_cat = _parse_zip_plist(file_path)
+        df_eager, file_cat = _parse_zip_bundle(file_path)
 
     elif ext == '.plist':
         df_eager = _parse_single_plist(file_path)
 
     elif ext == '.tsv':
-        lf = pl.scan_csv(file_path, separator='\t', ignore_errors=True, infer_schema_length=0)
+        df_eager = pl.read_csv(file_path, separator='\t', ignore_errors=True, infer_schema_length=0, truncate_ragged_lines=True)
 
     else:
-        lf, file_cat = _parse_csv_robust(file_path, file_cat)
+        df_eager, file_cat = _parse_csv_robust(file_path, file_cat)
 
     # Volatility PSList fingerprint
     if df_eager is not None:
@@ -140,7 +140,83 @@ def ingest_file(file_path: str, ext: str) -> tuple:
                 )
             df_eager = df_eager.with_columns(exprs)
 
+    # Post-processing: clean array formats and normalize IPv6
+    if lf is not None:
+        lf = _clean_array_columns(lf)
+        lf = _normalize_ipv6_columns(lf)
+    elif df_eager is not None:
+        df_eager = _clean_array_columns(df_eager)
+        df_eager = _normalize_ipv6_columns(df_eager)
+
     return lf, df_eager, file_cat
+
+
+# ── IP column pattern for IPv6 normalization ──
+_IP_COL_KEYWORDS = frozenset([
+    "ip", "ipaddress", "sourceip", "destip", "clientip", "serverip",
+    "srcip", "dstip", "sourceaddress", "destinationip", "remoteaddress",
+    "localaddress", "endpointip", "remoteip", "hostip",
+])
+
+
+def _clean_array_columns(data):
+    """Strip Python list bracket/quote formatting from string columns.
+    Handles both LazyFrame and DataFrame transparently."""
+    is_lazy = isinstance(data, pl.LazyFrame)
+    try:
+        schema = data.collect_schema() if is_lazy else data.schema
+        str_cols = [name for name, dtype in schema.items() if dtype == pl.Utf8]
+        if not str_cols:
+            return data
+
+        # Sample to detect which columns have array format
+        if is_lazy:
+            sample = data.head(200).collect()
+        else:
+            sample = data.head(200)
+
+        cols_to_clean = []
+        for col in str_cols:
+            series = sample[col].drop_nulls()
+            if len(series) == 0:
+                continue
+            starts_bracket = series.str.starts_with("[").sum()
+            if starts_bracket / len(series) > 0.1:
+                cols_to_clean.append(col)
+
+        if not cols_to_clean:
+            return data
+
+        # Strip brackets and quotes
+        exprs = [
+            pl.col(c).str.replace_all(r"[\[\]']", "").str.strip_chars().alias(c)
+            for c in cols_to_clean
+        ]
+        return data.with_columns(exprs)
+    except Exception as e:
+        logger.debug(f"Array column cleaning skipped: {e}")
+        return data
+
+
+def _normalize_ipv6_columns(data):
+    """Strip ::ffff: prefix from IPv4-mapped IPv6 addresses in IP-like columns."""
+    is_lazy = isinstance(data, pl.LazyFrame)
+    try:
+        schema = data.collect_schema() if is_lazy else data.schema
+        str_cols = [name for name, dtype in schema.items() if dtype == pl.Utf8]
+
+        ip_cols = [c for c in str_cols if c.lower().replace("_", "") in _IP_COL_KEYWORDS]
+        if not ip_cols:
+            return data
+
+        exprs = [
+            pl.col(c).str.replace(r"^::ffff:", "").alias(c)
+            for c in ip_cols
+        ]
+        return data.with_columns(exprs)
+    except Exception as e:
+        logger.debug(f"IPv6 normalization skipped: {e}")
+        return data
 
 
 def normalize_and_save(lf, df_eager, dest_path: str) -> int:
@@ -171,8 +247,9 @@ def normalize_and_save(lf, df_eager, dest_path: str) -> int:
         if rename_mapping:
             lf = lf.rename(rename_mapping)
         lf = lf.with_row_index(name="_id", offset=1)
-        lf.sink_csv(dest_path)
-        return -1
+        df = lf.collect()
+        df.write_csv(dest_path)
+        return len(df)
     else:
         df_eager = df_eager.rename(rename_mapping)
         df_eager = df_eager.with_row_index(name="_id", offset=1)
@@ -308,9 +385,15 @@ def _parse_schtasks(lines: list, header_idx: int) -> pl.DataFrame:
 
 
 def _parse_text_file(file_path: str, ext: str) -> tuple:
-    """Parse .txt, .log, .pslist files. Returns (df_eager, file_cat)."""
+    """Parse .txt, .log, .pslist, .trc files. Returns (df_eager, file_cat)."""
     file_cat = "generic"
     try:
+        if ext == '.trc':
+            records = _parse_trc_content(file_path)
+            if records:
+                return pl.DataFrame(records), "Trace/TRC"
+            return _read_whitespace_csv(file_path), file_cat
+
         if ext == '.txt':
             df_txt = pl.read_csv(file_path, separator="\x1f", has_header=False, new_columns=["raw_line"], ignore_errors=True)
             # Attempt 1: macOS Unified Log format
@@ -403,7 +486,7 @@ def _parse_text_file(file_path: str, ext: str) -> tuple:
             return _read_whitespace_csv(file_path), file_cat
     except Exception as e:
         logger.error(f"Error reading pslist/txt: {e}")
-        lf = pl.scan_csv(file_path, ignore_errors=True, infer_schema_length=0)
+        lf = pl.scan_csv(file_path, ignore_errors=True, infer_schema_length=0, truncate_ragged_lines=True)
         # Return as eager for consistency
         return lf.collect(), file_cat
 
@@ -464,20 +547,44 @@ def _parse_ls_triage(lines: list, ls_pattern: str):
     return None
 
 
-def _parse_zip_plist(file_path: str) -> tuple:
-    """Parse a ZIP containing .plist files (macOS bundle)."""
+def _parse_zip_bundle(file_path: str) -> tuple:
+    """Parse a ZIP containing .plist or .trc files."""
     import zipfile
     import tempfile
     import shutil
     from pathlib import Path
-    import plistlib
 
     extract_dir = tempfile.mkdtemp()
     with zipfile.ZipFile(file_path, 'r') as zip_ref:
         zip_ref.extractall(extract_dir)
 
+    root = Path(extract_dir)
+    plist_files = list(root.rglob("*.plist"))
+    trc_files = list(root.rglob("*.trc"))
+
+    # Determine bundle type by majority file type
+    if trc_files and len(trc_files) >= len(plist_files):
+        result = _parse_zip_trc(trc_files)
+        shutil.rmtree(extract_dir, ignore_errors=True)
+        if result is not None and not result.is_empty():
+            return result, "Trace/Bulk_TRC"
+        raise Exception("No valid .trc files found in the ZIP archive.")
+    elif plist_files:
+        result = _parse_zip_plist_files(plist_files)
+        shutil.rmtree(extract_dir, ignore_errors=True)
+        if result is not None and not result.is_empty():
+            return result, "macOS/Bulk_Plist"
+        raise Exception("No valid .plist files found in the ZIP archive.")
+    else:
+        shutil.rmtree(extract_dir, ignore_errors=True)
+        raise Exception("ZIP contains no supported files (.plist, .trc).")
+
+
+def _parse_zip_plist_files(plist_files: list) -> pl.DataFrame:
+    """Parse a list of .plist file paths into a DataFrame."""
+    import plistlib
     records = []
-    for plist_file in Path(extract_dir).rglob("*.plist"):
+    for plist_file in plist_files:
         try:
             with open(plist_file, 'rb') as f:
                 data = plistlib.load(f)
@@ -497,13 +604,109 @@ def _parse_zip_plist(file_path: str) -> tuple:
             })
         except Exception as e:
             logger.error(f"Error parsing plist in zip: {e}")
+    return pl.DataFrame(records) if records else None
 
-    shutil.rmtree(extract_dir, ignore_errors=True)
 
+def _parse_zip_trc(trc_files: list) -> pl.DataFrame:
+    """Parse a list of .trc file paths into a consolidated DataFrame."""
+    all_records = []
+    for trc_file in trc_files:
+        try:
+            records = _parse_trc_content(str(trc_file), str(trc_file.name))
+            all_records.extend(records)
+        except Exception as e:
+            logger.error(f"Error parsing .trc in zip [{trc_file.name}]: {e}")
+    return pl.DataFrame(all_records) if all_records else None
+
+
+def _parse_trc_content(file_path: str, source_name: str = "") -> list:
+    """Parse a single .trc file into a list of dicts.
+
+    Supports common trace formats:
+    - Oracle .trc (timestamps + ORA errors)
+    - SQL Server .trc (text traces)
+    - Generic timestamped traces
+    """
+    records = []
+    timestamp_patterns = [
+        # Oracle: "*** 2026-01-23T11:28:44.123456+00:00"
+        re.compile(r"^\*{3}\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[\.\d]*)"),
+        # Generic ISO: "2026-01-23 11:28:44.123"
+        re.compile(r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}[\.\d]*)"),
+        # Syslog-style: "Jan 23 11:28:44"
+        re.compile(r"^([A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})"),
+    ]
+    source = source_name or os.path.basename(file_path)
+
+    with open(file_path, 'r', errors='replace') as f:
+        lines = f.readlines()
+
+    current_ts = ""
+    current_block = []
+
+    def flush_block():
+        if current_block:
+            message = " ".join(current_block).strip()
+            if message:
+                records.append({
+                    "Time": current_ts,
+                    "Source_File": source,
+                    "EventID": "Trace_Entry",
+                    "Message": message[:2000],
+                    "Level": _classify_trc_level(message),
+                })
+
+    for line in lines:
+        stripped = line.rstrip()
+        if not stripped:
+            continue
+
+        # Try to match a timestamp at the start of the line
+        matched_ts = None
+        for pat in timestamp_patterns:
+            m = pat.match(stripped)
+            if m:
+                matched_ts = m.group(1).strip()
+                break
+
+        if matched_ts:
+            flush_block()
+            current_ts = matched_ts
+            # Rest of line after timestamp is the message start
+            rest = stripped[len(matched_ts):].strip().lstrip("*:- ")
+            current_block = [rest] if rest else []
+        else:
+            current_block.append(stripped)
+
+    flush_block()
+
+    # If no timestamps found, treat each line as a record
     if not records:
-        raise Exception("No valid .plist files found in the ZIP archive.")
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped:
+                records.append({
+                    "Time": "",
+                    "Source_File": source,
+                    "EventID": "Trace_Line",
+                    "Message": stripped[:2000],
+                    "Level": _classify_trc_level(stripped),
+                    "Line": str(i + 1),
+                })
 
-    return pl.DataFrame(records), "macOS/Bulk_Plist"
+    return records
+
+
+def _classify_trc_level(message: str) -> str:
+    """Classify trace message severity."""
+    msg_lower = message.lower()
+    if any(w in msg_lower for w in ['error', 'fatal', 'fail', 'exception', 'ora-', 'crash']):
+        return "Error"
+    if any(w in msg_lower for w in ['warn', 'timeout', 'retry', 'slow']):
+        return "Warning"
+    if any(w in msg_lower for w in ['debug', 'trace', 'verbose']):
+        return "Debug"
+    return "Info"
 
 
 def _parse_single_plist(file_path: str) -> pl.DataFrame:
@@ -529,28 +732,28 @@ def _parse_single_plist(file_path: str) -> pl.DataFrame:
 
 
 def _parse_csv_robust(file_path: str, file_cat: str) -> tuple:
-    """Robust CSV reading with encoding fallback and headerless detection."""
+    """Robust CSV reading with encoding fallback and headerless detection.
+    Uses read_csv (eager, no mmap) to avoid SIGBUS on freshly written files on APFS."""
     try:
-        lf = pl.scan_csv(file_path, ignore_errors=True, infer_schema_length=0)
-        lf.head(1).collect()
+        df = pl.read_csv(file_path, ignore_errors=True, infer_schema_length=0, truncate_ragged_lines=True)
     except Exception:
         try:
-            lf = pl.scan_csv(file_path, ignore_errors=True, infer_schema_length=0, encoding='utf8-lossy')
+            df = pl.read_csv(file_path, ignore_errors=True, infer_schema_length=0, truncate_ragged_lines=True, encoding='utf8-lossy')
         except Exception as final_e:
             raise final_e
 
     # Detect headerless CSV: first column name looks like Unix permissions
     try:
-        _first_col = lf.collect_schema().names()[0]
+        _first_col = df.columns[0]
         if re.match(r'^[-dlcbpst][-rwxst@+]{6,}', _first_col) or _first_col.startswith('/'):
-            _n_cols = len(lf.collect_schema().names())
+            _n_cols = len(df.columns)
             _new_cols = [f'Field_{i}' for i in range(_n_cols)]
             try:
-                lf = pl.scan_csv(file_path, has_header=False, new_columns=_new_cols, ignore_errors=True, infer_schema_length=0)
+                df = pl.read_csv(file_path, has_header=False, new_columns=_new_cols, ignore_errors=True, infer_schema_length=0, truncate_ragged_lines=True)
             except Exception:
-                lf = pl.scan_csv(file_path, has_header=False, new_columns=_new_cols, ignore_errors=True, infer_schema_length=0, encoding='utf8-lossy')
+                df = pl.read_csv(file_path, has_header=False, new_columns=_new_cols, ignore_errors=True, infer_schema_length=0, truncate_ragged_lines=True, encoding='utf8-lossy')
             file_cat = "FileSystem/LS_Triage"
     except Exception:
         pass
 
-    return lf, file_cat
+    return df, file_cat

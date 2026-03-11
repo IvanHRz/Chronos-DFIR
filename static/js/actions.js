@@ -1,6 +1,6 @@
-import { API } from './api.js?v=191';
-import ChronosState from './state.js?v=191';
-import events from './events.js?v=191';
+import { API } from './api.js?v=202';
+import ChronosState from './state.js?v=202';
+import events from './events.js?v=202';
 
 export class ActionManager {
     constructor(gridManager, chartManager) {
@@ -205,6 +205,67 @@ export class ActionManager {
             }
         }
 
+        // ── 9. THREAT INTELLIGENCE ENRICHMENT ──
+        const ti = data.threat_intelligence;
+        if (ti && ti.total_enriched > 0) {
+            section("THREAT INTELLIGENCE ENRICHMENT");
+            if (ti.ip_enrichment?.length) {
+                rows.push(pad(["IP Address Enrichment"]));
+                headers("IP", "Country", "ISP", "Abuse Score", "VirusTotal");
+                for (const ip of ti.ip_enrichment) {
+                    const abuse = ip.abuse || {};
+                    const vt = ip.vt || {};
+                    const ipApi = ip.ip_api || {};
+                    rows.push(pad([
+                        ip.ip || "",
+                        ipApi.country || abuse.country || "",
+                        ipApi.isp || abuse.isp || "",
+                        abuse.abuse_confidence !== undefined ? `${abuse.abuse_confidence}%` : "N/A",
+                        vt.malicious !== undefined ? `${vt.malicious} detections` : "N/A"
+                    ]));
+                }
+            }
+            if (ti.domain_enrichment?.length) {
+                rows.push(pad(["Domain Enrichment"]));
+                headers("Domain", "URLhaus Status", "Threat Type", "VirusTotal");
+                for (const d of ti.domain_enrichment) {
+                    const uh = d.urlhaus || {};
+                    const vt = d.vt || {};
+                    rows.push(pad([
+                        d.domain || "",
+                        uh.is_host ? "Listed" : "Clean",
+                        uh.threat_type || "N/A",
+                        vt.malicious !== undefined ? `${vt.malicious} detections` : "N/A"
+                    ]));
+                }
+            }
+            if (ti.hash_enrichment?.length) {
+                rows.push(pad(["Hash Enrichment"]));
+                headers("Hash", "VT Malicious", "VT Undetected", "Threat Name");
+                for (const h of ti.hash_enrichment) {
+                    const vt = h.vt || {};
+                    rows.push(pad([
+                        h.hash || "",
+                        String(vt.malicious || 0),
+                        String(vt.undetected || 0),
+                        vt.popular_threat_name || "N/A"
+                    ]));
+                }
+            }
+            if (ti.email_enrichment?.length) {
+                rows.push(pad(["Email Enrichment"]));
+                headers("Email", "Breaches", "Services");
+                for (const e of ti.email_enrichment) {
+                    const hibp = e.hibp || {};
+                    rows.push(pad([
+                        e.email || "",
+                        String(hibp.breach_count || 0),
+                        (hibp.breaches || []).join(", ")
+                    ]));
+                }
+            }
+        }
+
         return rows;
     }
 
@@ -289,7 +350,7 @@ export class ActionManager {
                 end_time: ChronosState.endTime || "",
                 col_filters: JSON.stringify(ChronosState.currentColumnFilters || []),
                 selected_ids: selectedIds,
-                visible_columns: visibleCols,
+                visible_columns: visibleCols.filter(c => c != null && c !== ''),
                 sort_col,
                 sort_dir
             });
@@ -297,6 +358,9 @@ export class ActionManager {
 
             if (result.download_url) {
                 await this._triggerDownload(result.download_url, result.filename || `Export.${format}`);
+                // Show success toast with SHA256 if available
+                const hashInfo = result.sha256 ? `\nSHA256: ${result.sha256.substring(0, 16)}...` : '';
+                this._showPdfToast(`✅ Export complete: ${result.filename || format.toUpperCase()}${hashInfo}`, 'success', 4000);
             } else {
                 alert("Export failed: " + (result.error || result.detail || JSON.stringify(result)));
             }
@@ -609,6 +673,9 @@ export class ActionManager {
                             title: h.title, level: h.level,
                             technique: h.mitre_technique, events: h.matched_rows
                         })),
+                        mitre_kill_chain: data.mitre_kill_chain || [],
+                        threat_intelligence: data.threat_intelligence || {},
+                        enrichment_coverage: data.enrichment_coverage || {},
                         results: data.results
                     };
                     const blob = new Blob([JSON.stringify(summary, null, 2)], { type: 'application/json' });
@@ -665,28 +732,28 @@ export class ActionManager {
 
                             // Inform user which method was used
                             const methodLabels = {
-                                'weasyprint':    '✅ PDF generado con WeasyPrint.',
-                                'playwright':    '✅ PDF generado con Playwright (Chromium headless).',
-                                'xhtml2pdf':     '✅ PDF generado con xhtml2pdf.',
-                                'wkhtmltopdf':   '✅ PDF generado con wkhtmltopdf.',
+                                'weasyprint':    '✅ PDF generated with WeasyPrint.',
+                                'playwright':    '✅ PDF generated with Playwright (headless Chromium).',
+                                'xhtml2pdf':     '✅ PDF generated with xhtml2pdf.',
+                                'wkhtmltopdf':   '✅ PDF generated with wkhtmltopdf.',
                                 'browser-print': null  // handled below
                             };
                             if (result.fallback || result.method === 'browser-print') {
                                 // Open HTML in new tab so print dialog fires automatically
                                 window.open(result.download_url, '_blank');
                                 this._showPdfToast(
-                                    '📄 El diálogo de impresión se abrirá en la nueva pestaña. ' +
-                                    'Selecciona <strong>Guardar como PDF</strong> en la impresora.',
+                                    '📄 The print dialog will open in a new tab. ' +
+                                    'Select <strong>Save as PDF</strong> as the printer.',
                                     'info', 8000
                                 );
                             } else if (methodLabels[result.method]) {
                                 this._showPdfToast(methodLabels[result.method], 'success', 3000);
                             }
                         } else {
-                            this._showPdfToast('❌ Error al generar PDF: ' + (result.error || 'Error desconocido'), 'error', 5000);
+                            this._showPdfToast('❌ PDF generation error: ' + (result.error || 'Unknown error'), 'error', 5000);
                         }
                     } catch(err) {
-                        this._showPdfToast('❌ Error de conexión: ' + err.message, 'error', 5000);
+                        this._showPdfToast('❌ Connection error: ' + err.message, 'error', 5000);
                     } finally {
                         expToggle.innerHTML = '<i class="fas fa-download"></i> Export Report <i class="fas fa-caret-down" style="font-size:0.75rem;"></i>';
                     }
@@ -755,8 +822,8 @@ export class ActionManager {
                     : '<div style="color:#4ade80;">No anomalies detected.</div>';
                 const jDiv = document.createElement('div');
                 jDiv.className = 'risk-justify-log';
-                jDiv.style.cssText = 'font-size:0.65rem; color:#94a3b8; margin-top:4px; max-height:120px; overflow-y:auto;';
-                jDiv.innerHTML = `<strong style="color:#64748b;">Justification${score}:</strong>${justify}`;
+                jDiv.style.cssText = 'font-size:0.65rem; color:#e2e8f0; margin-top:4px; max-height:120px; overflow-y:auto;';
+                jDiv.innerHTML = `<strong style="color:#cbd5e1;">Justification${score}:</strong>${justify}`;
                 riskCard.appendChild(jDiv);
             }
         }
@@ -893,7 +960,7 @@ export class ActionManager {
 
                             if (section.hosts && section.hosts.length > 0) {
                                 body += `<div><strong style="color:var(--text-secondary);">Top Assets (Hosts):</strong><br>
-                                    ${section.hosts.map(h => `<span class="tactic-badge" style="background:rgba(139,92,246,0.1); color:#a78bfa; border:1px solid rgba(139,92,246,0.2);">${h.id} (${h.count})</span>`).join(' ')}
+                                    ${section.hosts.map(h => `<span class="tactic-badge" style="background:rgba(96,165,250,0.1); color:#60a5fa; border:1px solid rgba(96,165,250,0.2);">${h.id} (${h.count})</span>`).join(' ')}
                                 </div>`;
                             }
 
@@ -1019,11 +1086,14 @@ export class ActionManager {
         if (data.sigma_hits && data.sigma_hits.length > 0) {
             const levelColor = { critical: '#ff4d4d', high: '#f59e0b', medium: '#facc15', low: '#4ade80' };
             const sigmaId = `sigma-${Date.now()}`;
+            const sigmaTotal = data.sigma_total || data.sigma_hits.length;
+            const sigmaTruncated = data.sigma_truncated || false;
             html += `
                 <div class="report-section" style="margin-bottom:25px;">
                     <h4 style="color:#f97316; border-bottom:1px solid #333; padding-bottom:8px; margin-bottom:12px; font-size:1.1rem; text-transform:uppercase; letter-spacing:0.5px;">
-                        SIGMA RULE DETECTIONS (${data.sigma_hits.length} rules fired)
+                        SIGMA RULE DETECTIONS (${sigmaTotal} rules fired${sigmaTruncated ? `, showing top ${data.sigma_hits.length}` : ''})
                     </h4>
+                    ${sigmaTruncated ? `<div style="font-size:0.75rem; color:#f59e0b; margin-bottom:8px; padding:4px 8px; background:rgba(249,115,22,0.1); border-radius:4px;">Showing top ${data.sigma_hits.length} of ${sigmaTotal} total detections. Use "View all in Grid" to see complete results.</div>` : ''}
                     <div style="font-size:0.85rem; padding:10px; background:rgba(0,0,0,0.25); border-radius:6px; border:1px solid rgba(249,115,22,0.25);">
                         ${data.sigma_hits.map((h, idx) => {
                             const color = levelColor[h.level] || '#94a3b8';
@@ -1128,17 +1198,24 @@ export class ActionManager {
                 initial_access: '#ef4444', execution: '#f97316', persistence: '#eab308',
                 privilege_escalation: '#84cc16', defense_evasion: '#22c55e',
                 credential_access: '#14b8a6', discovery: '#06b6d4', lateral_movement: '#3b82f6',
-                collection: '#6366f1', command_and_control: '#8b5cf6', exfiltration: '#a855f7',
-                impact: '#ec4899', reconnaissance: '#f43f5e', resource_development: '#fb923c', unknown: '#64748b'
+                collection: '#6366f1', command_and_control: '#60a5fa', exfiltration: '#38bdf8',
+                impact: '#f43f5e', reconnaissance: '#fb7185', resource_development: '#fb923c', unknown: '#64748b'
             };
             const sevBadge = { critical: '#ff4d4d', high: '#f59e0b', medium: '#facc15', low: '#4ade80' };
+            // Sort by criticality: critical first, then high, medium, low; tiebreak by total_hits
+            const sevOrder = { critical: 0, high: 1, medium: 2, low: 3, informational: 4 };
+            const sortedKillChain = [...data.mitre_kill_chain].sort((a, b) => {
+                const sa = sevOrder[a.max_severity] ?? 99;
+                const sb = sevOrder[b.max_severity] ?? 99;
+                return sa - sb || b.total_hits - a.total_hits;
+            });
             html += `
                 <div class="report-section" style="margin-bottom:25px;">
-                    <h4 style="color:#a855f7; border-bottom:1px solid #333; padding-bottom:8px; margin-bottom:12px; font-size:1.1rem; text-transform:uppercase; letter-spacing:0.5px;">
+                    <h4 style="color:#38bdf8; border-bottom:1px solid #333; padding-bottom:8px; margin-bottom:12px; font-size:1.1rem; text-transform:uppercase; letter-spacing:0.5px;">
                         MITRE ATT&CK KILL CHAIN (${data.mitre_kill_chain.length} tactics observed)
                     </h4>
-                    <div style="display:flex; flex-wrap:wrap; gap:10px; padding:10px; background:rgba(0,0,0,0.25); border-radius:6px; border:1px solid rgba(168,85,247,0.25);">
-                        ${data.mitre_kill_chain.map(t => `
+                    <div style="display:flex; flex-wrap:wrap; gap:10px; padding:10px; background:rgba(0,0,0,0.25); border-radius:6px; border:1px solid rgba(56,189,248,0.25);">
+                        ${sortedKillChain.map(t => `
                             <div style="flex:1; min-width:160px; background:rgba(0,0,0,0.3); border-radius:6px; padding:10px; border-left:3px solid ${tacticColors[t.tactic] || '#64748b'};">
                                 <div style="font-size:0.7rem; text-transform:uppercase; color:${tacticColors[t.tactic] || '#64748b'}; font-weight:700; margin-bottom:2px;">
                                     ${t.tactic_id || ''} ${t.tactic.replace(/_/g, ' ')}
@@ -1194,7 +1271,7 @@ export class ActionManager {
                                         <td style="padding:5px 8px;">${pivotIcon[c.pivot_type] || '\uD83D\uDD17'} ${c.pivot_type}</td>
                                         <td style="padding:5px 8px; font-family:monospace; color:var(--accent-primary); font-size:0.8rem;">
                                             ${c.pivot_value}
-                                            ${c.sources && c.sources.length > 1 ? `<span style="font-size:0.65rem; color:#a855f7; margin-left:4px;">[${c.sources.length} sources]</span>` : ''}
+                                            ${c.sources && c.sources.length > 1 ? `<span style="font-size:0.65rem; color:#38bdf8; margin-left:4px;">[${c.sources.length} sources]</span>` : ''}
                                             ${hasRowIds ? `<button onclick="window._chronosViewSigmaInGrid && window._chronosViewSigmaInGrid(${JSON.stringify(c.row_ids)})"
                                                 style="font-size:0.65rem; padding:1px 6px; margin-left:6px; background:rgba(6,182,212,0.15); border:1px solid rgba(6,182,212,0.4); border-radius:3px; color:#06b6d4; cursor:pointer; vertical-align:middle;">
                                                 View</button>` : ''}
@@ -1283,6 +1360,27 @@ export class ActionManager {
             }
         }
 
+        // --- IOC COVERAGE REPORT ---
+        if (data.enrichment_coverage && data.enrichment_coverage.total_iocs > 0) {
+            const cov = data.enrichment_coverage;
+            const byType = cov.by_type || {};
+            const typeBadges = Object.entries(byType).map(([t, v]) =>
+                v.found > 0 ? `<span style="margin-right:8px;">${t.toUpperCase()}: <span style="color:#4ade80;">${v.enriched}</span>/${v.found}</span>` : ''
+            ).filter(Boolean).join('');
+            html += `
+                <div class="report-section" style="margin-bottom:15px;">
+                    <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+                        <span style="background:#166534; color:#4ade80; padding:3px 10px; border-radius:4px; font-size:0.8rem; font-weight:700;">
+                            ANALYZED: ${cov.analyzed}
+                        </span>
+                        ${cov.pending > 0 ? `<span style="background:#713f12; color:#fbbf24; padding:3px 10px; border-radius:4px; font-size:0.8rem; font-weight:700;">
+                            PENDING: ${cov.pending}
+                        </span>` : ''}
+                        <span style="font-size:0.75rem; color:var(--text-secondary);">${typeBadges}</span>
+                    </div>
+                </div>`;
+        }
+
         // --- THREAT INTELLIGENCE ENRICHMENT SECTION ---
         if (data.threat_intelligence && data.threat_intelligence.total_enriched > 0) {
             const ti = data.threat_intelligence;
@@ -1297,20 +1395,21 @@ export class ActionManager {
 
             html += `
                 <div class="report-section" style="margin-bottom:25px;">
-                    <h4 style="color:#8b5cf6; border-bottom:1px solid #333; padding-bottom:8px; margin-bottom:12px; font-size:1.1rem; text-transform:uppercase; letter-spacing:0.5px;">
+                    <h4 style="color:#60a5fa; border-bottom:1px solid #333; padding-bottom:8px; margin-bottom:12px; font-size:1.1rem; text-transform:uppercase; letter-spacing:0.5px;">
                         THREAT INTELLIGENCE ENRICHMENT (${ti.total_enriched} IOCs enriched)
                     </h4>
                     <div style="font-size:0.7rem; color:var(--text-secondary); margin-bottom:10px;">
                         Providers: ${(ti.providers_used || []).join(', ')}
                     </div>`;
 
-            // IP enrichment
+            // IP enrichment (sorted by threat: highest abuse score first)
             if (ti.ip_enrichment && ti.ip_enrichment.length > 0) {
+                const sortedIPs = [...ti.ip_enrichment].sort((a, b) => ((b.abuse || {}).abuse_confidence || 0) - ((a.abuse || {}).abuse_confidence || 0));
                 html += `
                     <div style="margin-bottom:15px;">
-                        <div style="font-size:0.8rem; font-weight:700; color:#8b5cf6; margin-bottom:8px;">IP ADDRESSES</div>
+                        <div style="font-size:0.8rem; font-weight:700; color:#60a5fa; margin-bottom:8px;">IP ADDRESSES</div>
                         <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:8px;">
-                            ${ti.ip_enrichment.map(ip => {
+                            ${sortedIPs.map(ip => {
                                 const geo = ip.geo || {};
                                 const abuse = ip.abuse || {};
                                 const vt = ip.vt || {};
@@ -1335,13 +1434,18 @@ export class ActionManager {
                     </div>`;
             }
 
-            // Domain enrichment
+            // Domain enrichment (sorted by threat: malicious first)
             if (ti.domain_enrichment && ti.domain_enrichment.length > 0) {
+                const sortedDomains = [...ti.domain_enrichment].sort((a, b) => {
+                    const aScore = ((a.urlhaus || {}).query_status === 'is_host' ? 100 : 0) + ((a.vt || {}).malicious || 0);
+                    const bScore = ((b.urlhaus || {}).query_status === 'is_host' ? 100 : 0) + ((b.vt || {}).malicious || 0);
+                    return bScore - aScore;
+                });
                 html += `
                     <div style="margin-bottom:15px;">
-                        <div style="font-size:0.8rem; font-weight:700; color:#8b5cf6; margin-bottom:8px;">DOMAINS</div>
+                        <div style="font-size:0.8rem; font-weight:700; color:#60a5fa; margin-bottom:8px;">DOMAINS</div>
                         <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(280px, 1fr)); gap:8px;">
-                            ${ti.domain_enrichment.map(d => {
+                            ${sortedDomains.map(d => {
                                 const uh = d.urlhaus || {};
                                 const vt = d.vt || {};
                                 const isMalicious = (vt.malicious || 0) > 0 || uh.query_status === 'is_host';
@@ -1359,12 +1463,13 @@ export class ActionManager {
                     </div>`;
             }
 
-            // Hash enrichment
+            // Hash enrichment (sorted by threat: most detections first)
             if (ti.hash_enrichment && ti.hash_enrichment.length > 0) {
+                const sortedHashes = [...ti.hash_enrichment].sort((a, b) => ((b.vt || {}).malicious || 0) - ((a.vt || {}).malicious || 0));
                 html += `
                     <div style="margin-bottom:15px;">
-                        <div style="font-size:0.8rem; font-weight:700; color:#8b5cf6; margin-bottom:8px;">FILE HASHES</div>
-                        ${ti.hash_enrichment.map(h => {
+                        <div style="font-size:0.8rem; font-weight:700; color:#60a5fa; margin-bottom:8px;">FILE HASHES</div>
+                        ${sortedHashes.map(h => {
                             const vt = h.vt || {};
                             return `
                             <div style="background:rgba(0,0,0,0.3); border-radius:6px; padding:8px 12px; margin-bottom:4px; border-left:3px solid ${vtColor(vt.malicious || 0)};">
@@ -1376,12 +1481,13 @@ export class ActionManager {
                     </div>`;
             }
 
-            // Email enrichment (HIBP)
+            // Email enrichment (sorted by threat: breached first)
             if (ti.email_enrichment && ti.email_enrichment.length > 0) {
+                const sortedEmails = [...ti.email_enrichment].sort((a, b) => ((b.hibp || {}).breach_count || 0) - ((a.hibp || {}).breach_count || 0));
                 html += `
                     <div style="margin-bottom:15px;">
-                        <div style="font-size:0.8rem; font-weight:700; color:#8b5cf6; margin-bottom:8px;">CREDENTIAL BREACHES</div>
-                        ${ti.email_enrichment.map(e => {
+                        <div style="font-size:0.8rem; font-weight:700; color:#60a5fa; margin-bottom:8px;">CREDENTIAL BREACHES</div>
+                        ${sortedEmails.map(e => {
                             const hibp = e.hibp || {};
                             const breached = (hibp.breach_count || 0) > 0;
                             return `

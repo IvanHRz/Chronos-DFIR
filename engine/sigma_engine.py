@@ -431,6 +431,7 @@ def match_sigma_rules(df: pl.DataFrame, rules: Optional[list] = None) -> list[di
         return []
 
     columns = df.columns
+    columns_lower = {c.lower(): c for c in columns}
     hits = []
 
     for rule in rules:
@@ -442,12 +443,35 @@ def match_sigma_rules(df: pl.DataFrame, rules: Optional[list] = None) -> list[di
         if not condition_str:
             continue
 
+        # Pre-check: extract all field names referenced by this rule
+        # If NONE of them exist in the DataFrame, skip the rule entirely
+        _meta_keys = {"condition", "timeframe", "correlation"}
+        rule_fields = set()
+        for block_name, block_value in detection.items():
+            if block_name in _meta_keys:
+                continue
+            if isinstance(block_value, dict):
+                for field_raw in block_value.keys():
+                    rule_fields.add(field_raw.split("|")[0])
+            elif isinstance(block_value, list):
+                for b in block_value:
+                    if isinstance(b, dict):
+                        for field_raw in b.keys():
+                            rule_fields.add(field_raw.split("|")[0])
+
+        if rule_fields:
+            has_any_field = any(
+                f in columns or f.lower() in columns_lower
+                for f in rule_fields
+            )
+            if not has_any_field:
+                continue  # Skip rule — none of its fields exist in data
+
         # Collect field names referenced in detection blocks for evidence columns
         detection_fields: set[str] = set()
 
         # Build named expression blocks (skip meta keys)
         named_exprs: dict[str, Optional[pl.Expr]] = {}
-        _meta_keys = {"condition", "timeframe", "correlation"}
         for block_name, block_value in detection.items():
             if block_name in _meta_keys:
                 continue
